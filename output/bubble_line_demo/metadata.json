@@ -1,0 +1,86 @@
+{
+  "input_path": "manga109/rec/train/word_000113.png",
+  "num_columns": 3,
+  "column_bboxes": [
+    [
+      79,
+      1,
+      100,
+      133
+    ],
+    [
+      37,
+      1,
+      61,
+      242
+    ],
+    [
+      5,
+      3,
+      23,
+      218
+    ]
+  ],
+  "column_paths": [
+    "output\\bubble_line_demo\\col_01.png",
+    "output\\bubble_line_demo\\col_02.png",
+    "output\\bubble_line_demo\\col_03.png"
+  ],
+  "projection": {
+    "threshold": 40.2142858505249,
+    "num_gaps": 4,
+    "num_intervals": 3,
+    "intervals": [
+      [
+        5,
+        23
+      ],
+      [
+        37,
+        61
+      ],
+      [
+        79,
+        100
+      ]
+    ],
+    "threshold_mode": "auto_percentile",
+    "threshold_direction": "low"
+  },
+  "ctc_metrics": {
+    "input_hw": [
+      22,
+      626
+    ],
+    "wh_ratio": 28.454545454545453,
+    "max_wh_ratio": 3.125,
+    "resized_w": 100,
+    "valid_ratio": 1.0,
+    "warnings": [
+      "Anh line qua dai so voi image_shape CRNN, se bi nen manh theo truc ngang."
+    ]
+  },
+  "params": {
+    "input_image": "manga109/rec/train/word_000113.png",
+    "manual_roi": null,
+    "output_dir": "output/bubble_line_demo",
+    "binarize_method": "otsu",
+    "gaussian_blur_ksize": 3,
+    "furigana_mode": "light",
+    "open_kernel_scale": 0.018,
+    "erode_kernel_scale": 0.012,
+    "smooth_window": 7,
+    "gap_percentile": 30.0,
+    "gap_scale": 1.0,
+    "sensitivity_boost": 1.25,
+    "min_gap_width": 3,
+    "min_col_width": 10,
+    "col_pad_y": 2,
+    "gap_threshold_mode": "auto_percentile",
+    "gap_threshold_direction": "low",
+    "gap_threshold_value": null,
+    "sort_right_to_left": true,
+    "spacer_px": 15,
+    "rotate_angle": -90
+  }
+}
