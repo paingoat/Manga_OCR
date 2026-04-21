@@ -1,4 +1,10 @@
 # %% [markdown]
+# ### Bước 1 — Gỡ stack `torch` và cài `paddlepaddle-gpu`
+# 
+# Runpod có thể đi kèm sẵn các thư viện torch/triton xung đột với Paddle. Gỡ trước rồi cài `paddlepaddle-gpu==3.0.0` (wheel CUDA 12.6).
+# 
+
+# %% [markdown]
 # # `final_train_svtr.ipynb` — Huấn luyện SVTR Tiny (PaddleOCR) cho bài toán Rec tiếng Nhật
 # 
 # Notebook này chạy trên **Runpod** (RTX 3090 24GB VRAM, 32 vCPU, 125GB RAM):
@@ -10,12 +16,6 @@
 # - Đóng gói artifact `.tar.gz` để tải về
 # 
 # > Notebook chỉ tập trung vào quá trình train/infer/eval — không build dataset.
-# 
-
-# %% [markdown]
-# ### Bước 1 — Gỡ stack `torch` và cài `paddlepaddle-gpu`
-# 
-# Runpod có thể đi kèm sẵn các thư viện torch/triton xung đột với Paddle. Gỡ trước rồi cài `paddlepaddle-gpu==3.0.0` (wheel CUDA 12.6).
 # 
 
 # %%
