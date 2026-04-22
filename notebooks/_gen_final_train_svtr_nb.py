@@ -286,7 +286,7 @@ cells.append(
 Profile cho RTX 3090 24GB:
 - `batch_size_per_card = 256` (sẽ tinh chỉnh sau)
 - `num_workers = 12` (32 vCPU)
-- Adam + Cosine LR (`4e-4`, `warmup_epoch=2`), L2 reg `1e-5`
+- Adam + Cosine LR (`8e-4`, `warmup_epoch=3`), L2 reg `1e-5` — đã scale theo batch 256 (từ `4e-4` ở batch 96)
 - `eval_step = max(200, steps_per_epoch)` (eval mỗi ~1 epoch)
 - `save_epoch_step = 5` (snapshot định kỳ mỗi 5 epoch; `best_accuracy` vẫn update mỗi lần eval cải thiện)
 - `Metric.main_indicator = norm_edit_dis` (≡ `1 − NED`, sát với metric đánh giá cuối)
@@ -372,7 +372,7 @@ cfg = {
         "name": "Adam",
         "beta1": 0.9,
         "beta2": 0.999,
-        "lr": {"name": "Cosine", "learning_rate": 4e-4, "warmup_epoch": 2},
+        "lr": {"name": "Cosine", "learning_rate": 8e-4, "warmup_epoch": 3},
         "regularizer": {"name": "L2", "factor": 1e-5},
     },
     "Architecture": architecture_cfg,
@@ -471,16 +471,21 @@ cells.append(
 
     total_epoch = None
     pbar = None
-    best_metric = -1.0
+    best_metric = float("-inf")
     evals_since_improve = 0
+    eval_idx = 0
     early_stopped = False
 
+    # Accept both plain (0.1632) and scientific (7.248e-06) float literals so that
+    # near-zero eval values emitted right after warmup are parsed correctly instead
+    # of collapsing their mantissa into a huge fake "best" that nothing can beat.
+    _FLOAT = r"[-+]?[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?"
     p_epoch = re.compile(r"\[(\d+)\s*/\s*(\d+)\]")
     p_eval_metric = re.compile(
-        r"(?:cur metric|best metric|metric eval).*?norm_edit_dis[:= ]\s*([0-9]*\.?[0-9]+)",
+        rf"(?:cur metric|best metric|metric eval).*?norm_edit_dis[:= ]\s*({_FLOAT})",
         re.IGNORECASE,
     )
-    p_metric_only = re.compile(r"\bnorm_edit_dis\s*[:=]\s*([0-9]*\.?[0-9]+)")
+    p_metric_only = re.compile(rf"\bnorm_edit_dis\s*[:=]\s*({_FLOAT})")
 
     with open(log_path, "w", encoding="utf-8") as fw:
         proc = subprocess.Popen(
@@ -509,9 +514,11 @@ cells.append(
                         pbar.refresh()
 
                 low = line.lower()
-                is_eval_line = ("cur metric" in low) or ("best metric" in low) or (
-                    "metric eval" in low and "norm_edit_dis" in low
-                )
+                # PaddleOCR emits BOTH "cur metric, norm_edit_dis: ..." and
+                # "best metric, norm_edit_dis: ..." per eval. Only react to
+                # "cur metric" so the patience counter advances exactly once
+                # per evaluation (otherwise patience is effectively halved).
+                is_eval_line = ("cur metric" in low) and ("norm_edit_dis" in low)
 
                 if is_eval_line:
                     am = p_eval_metric.search(line) or p_metric_only.search(line)
@@ -522,15 +529,20 @@ cells.append(
                             cur_metric = None
 
                         if cur_metric is not None:
+                            eval_idx += 1
                             if cur_metric > best_metric + 1e-6:
                                 best_metric = cur_metric
                                 evals_since_improve = 0
-                                print(f"[ES] new best norm_edit_dis={best_metric:.4f}")
+                                print(
+                                    f"[ES] eval #{eval_idx} new best norm_edit_dis={best_metric:.6g}"
+                                )
                             else:
                                 evals_since_improve += 1
                                 print(
-                                    f"[ES] no improve ({evals_since_improve}/{patience_factor}), "
-                                    f"cur norm_edit_dis={cur_metric:.4f} best={best_metric:.4f}"
+                                    f"[ES] eval #{eval_idx} no improve "
+                                    f"({evals_since_improve}/{patience_factor}), "
+                                    f"cur norm_edit_dis={cur_metric:.6g} "
+                                    f"best={best_metric:.6g}"
                                 )
                                 if evals_since_improve >= patience_factor:
                                     early_stopped = True
@@ -558,7 +570,7 @@ cells.append(
         pbar.close()
 
     if early_stopped:
-        print("Train finished by EARLY STOP. Best norm_edit_dis =", best_metric)
+        print(f"Train finished by EARLY STOP. Best norm_edit_dis = {best_metric:.6g}")
         return 0
 
     print("Train finished with code:", rc)
