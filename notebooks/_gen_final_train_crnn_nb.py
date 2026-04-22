@@ -29,7 +29,7 @@ Notebook này chạy trên **Runpod** (RTX 3090 24GB VRAM, 32 vCPU, 125GB RAM):
 - Workspace mặc định: **`/workspace`**
 - Dữ liệu line đã được chuẩn bị sẵn ở bước trước, chỉ tải về và unpack
 - Pretrained: **`ch_ppocr_mobile_v2.0_rec_train`** (Chinese CRNN MobileNetV3 small 0.5 + BiLSTM + CTCHead) làm warm-start
-- Training với **early stopping** (patience = `16 × eval_step`)
+- Training với **early stopping** (patience = `24 × eval_step`)
 - Inference + đo **EM / CER / NED** trên tập **test**
 - Đóng gói artifact `.tar.gz` để tải về
 
@@ -291,8 +291,8 @@ cells.append(
 Profile cho RTX 3090 24GB (model nhỏ → đẩy batch lên cao):
 - `batch_size_per_card = 512` (CRNN MobileNetV3 small 0.5 rất gọn → 24GB VRAM dư sức)
 - `num_workers = 16` (32 vCPU; data-loader cần scale theo batch 512 to hơn SVTR bản cũ)
-- Adam + Cosine LR (`1.5e-3`, `warmup_epoch=3`), L2 reg `1e-5` — sqrt-scale từ baseline `1e-3 @ batch 256` của config gốc PaddleOCR
-- `eval_step = max(200, steps_per_epoch)` (eval mỗi ~1 epoch)
+- Adam + Cosine LR (`1.5e-3`, `warmup_epoch=8`), L2 reg `1e-5` — sqrt-scale từ baseline `1e-3 @ batch 256` của config gốc PaddleOCR; warmup kéo dài hơn baseline (5) để `CTCHead.fc` (bị reinit do dict khác pretrained) có thêm thời gian thoát pha **blank collapse** trước khi cosine giảm LR
+- `eval_step = steps_per_epoch` (eval **đúng 1 lần mỗi epoch**, bỏ sàn 200 cũ vì với batch 512 thì `steps_per_epoch ≈ 117 < 200` làm khoảng cách eval kéo dài ~1.7 epoch/lần)
 - `save_epoch_step = 5` (snapshot định kỳ; `best_accuracy` vẫn update mỗi lần eval cải thiện)
 - `Metric.main_indicator = norm_edit_dis` (≡ `1 − NED`, sát với metric đánh giá cuối)
 - Architecture ưu tiên đọc từ YAML đi kèm pretrained; fallback hardcoded theo `rec_chinese_lite_train_v2.0.yml` (`MobileNetV3 small scale=0.5 small_stride=[1,2,2,2] → SequenceEncoder rnn hidden=48 → CTCHead fc_decay=1e-5`)."""
@@ -312,11 +312,15 @@ NUM_WORKERS = int(globals().get("NUM_WORKERS_OVERRIDE", 16))
 EVAL_BATCH_PER_CARD = int(globals().get("EVAL_BATCH_PER_CARD_OVERRIDE", BATCH_PER_CARD))
 EPOCH_NUM = int(globals().get("EPOCH_NUM_OVERRIDE", 100))
 LEARNING_RATE = float(globals().get("LEARNING_RATE_OVERRIDE", 1.5e-3))
-WARMUP_EPOCH = int(globals().get("WARMUP_EPOCH_OVERRIDE", 3))
+WARMUP_EPOCH = int(globals().get("WARMUP_EPOCH_OVERRIDE", 8))
 
 n_train = count_lines(TRAIN_LABEL)
 steps_per_epoch = max(1, n_train // (BATCH_PER_CARD * N_GPU))
-EVAL_STEP = max(200, steps_per_epoch)
+# Eval exactly once per epoch. We intentionally do NOT floor this at 200 steps
+# anymore: with batch 512 over ~60k samples, steps_per_epoch is ~117, so a
+# floor of 200 meant "eval every ~1.7 epochs", which felt like "2 epochs/eval"
+# in the log and delayed feedback during the early CTC blank-collapse phase.
+EVAL_STEP = steps_per_epoch
 
 pretrained_params_file = PRETRAINED_PATH.with_suffix(".pdparams")
 pretrained_exists = pretrained_params_file.exists()
@@ -444,7 +448,7 @@ print("LEARNING_RATE   :", LEARNING_RATE)
 print("WARMUP_EPOCH    :", WARMUP_EPOCH)
 print("STEPS_PER_EPOCH :", steps_per_epoch)
 print("EVAL_STEP       :", EVAL_STEP)
-print("EARLY-STOP PATI :", 16 * EVAL_STEP, "steps (16 x eval_step)")"""
+print("EARLY-STOP PATI :", 24 * EVAL_STEP, "steps (24 x eval_step)")"""
     )
 )
 
@@ -454,7 +458,7 @@ cells.append(
 
 `run_train_with_progress` spawn `tools/train.py`, parse stdout để vẽ tqdm theo epoch và **theo dõi metric eval**:
 - Mỗi lần thấy dòng eval kết thúc với `norm_edit_dis: <x>`, so với best hiện tại (đồng bộ với `main_indicator`).
-- Nếu **không cải thiện trong `patience_factor=16` lần eval liên tiếp** (≈ `16 × eval_step` training steps, ~16 epoch khi eval mỗi epoch), terminate process → early stop.
+- Nếu **không cải thiện trong `patience_factor=24` lần eval liên tiếp** (≈ `24 × eval_step` training steps, ~24 epoch khi eval mỗi epoch), terminate process → early stop. Patience được nâng từ 16 → 24 để tránh dừng sớm ở giai đoạn đầu khi `CTCHead.fc` còn đang thoát pha **blank collapse** (eval 0 trong vài epoch đầu là bình thường với CRNN + dict khác pretrained).
 - Toàn bộ stdout/stderr ghi vào `train.log` để tiện debug."""
     )
 )
@@ -466,7 +470,7 @@ cells.append(
     log_path: Path,
     paddleocr_dir: Path,
     eval_step: int,
-    patience_factor: int = 16,
+    patience_factor: int = 24,
 ) -> int:
     train_script = paddleocr_dir / "tools" / "train.py"
     if not train_script.exists():
@@ -600,7 +604,7 @@ cells.append(
 
 
 rc = run_train_with_progress(
-    CONFIG_PATH, TRAIN_LOG, PADDLEOCR_DIR, eval_step=EVAL_STEP, patience_factor=16
+    CONFIG_PATH, TRAIN_LOG, PADDLEOCR_DIR, eval_step=EVAL_STEP, patience_factor=24
 )
 if rc != 0:
     raise RuntimeError("Training failed")"""
@@ -923,7 +927,7 @@ cells.append(
 
 Khi muốn train tiếp từ checkpoint `latest`, **uncomment toàn bộ cell** dưới đây và chỉnh `TARGET_TOTAL_EPOCH` (đây là **mốc tổng** muốn đạt, không phải số epoch cộng thêm).
 
-> Early stopping vẫn áp dụng với patience = `16 × eval_step`."""
+> Early stopping vẫn áp dụng với patience = `24 × eval_step`."""
     )
 )
 
@@ -990,7 +994,7 @@ cells.append(
 # )
 #
 # rc = run_train_with_progress(
-#     RESUME_CONFIG_PATH, TRAIN_LOG, PADDLEOCR_DIR, eval_step=EVAL_STEP, patience_factor=16
+#     RESUME_CONFIG_PATH, TRAIN_LOG, PADDLEOCR_DIR, eval_step=EVAL_STEP, patience_factor=24
 # )
 # if rc != 0:
 #     raise RuntimeError("Resume training failed")"""
