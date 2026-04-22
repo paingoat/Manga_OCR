@@ -113,6 +113,7 @@ cells.append(
     code(
         r"""import os
 import re
+import sys
 import json
 import math
 import shutil
@@ -435,7 +436,10 @@ cells.append(
     if not train_script.exists():
         raise FileNotFoundError(f"Cannot find train script: {train_script}")
 
-    cmd = ["python", str(train_script), "-c", str(config_path)]
+    # Use sys.executable to guarantee the same Python interpreter (kernel)
+    # that has `paddle` installed from Step 1. On Runpod, plain `python` on
+    # PATH often points to a different interpreter without paddle.
+    cmd = [sys.executable, str(train_script), "-c", str(config_path)]
     print("Running:", " ".join(cmd))
     print(f"Early-stopping patience: {patience_factor} evals (~{patience_factor * eval_step} steps)")
 
@@ -631,7 +635,7 @@ def export_inference_model_if_needed(
 
     infer_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
-        "python", str(export_script),
+        sys.executable, str(export_script),
         "-c", str(config_path),
         "-o",
         f"Global.pretrained_model={checkpoint_prefix}",
@@ -653,7 +657,7 @@ def run_predict_rec_on_dir(
         raise FileNotFoundError(f"Cannot find infer script: {infer_script}")
 
     base_cmd = [
-        "python", str(infer_script),
+        sys.executable, str(infer_script),
         "--rec_model_dir", str(infer_model_dir),
         "--image_dir", str(image_dir),
         "--rec_algorithm", "SVTR",
