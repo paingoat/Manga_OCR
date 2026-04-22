@@ -284,8 +284,8 @@ cells.append(
         """### Bước 6 — Sinh YAML config huấn luyện SVTR Tiny
 
 Profile cho RTX 3090 24GB:
-- `batch_size_per_card = 96` (sẽ tinh chỉnh sau)
-- `num_workers = 8` (32 vCPU)
+- `batch_size_per_card = 256` (sẽ tinh chỉnh sau)
+- `num_workers = 12` (32 vCPU)
 - Adam + Cosine LR (`4e-4`, `warmup_epoch=2`), L2 reg `1e-5`
 - `eval_step = max(200, steps_per_epoch)` (eval mỗi ~1 epoch)
 - `save_epoch_step = 5` (snapshot định kỳ mỗi 5 epoch; `best_accuracy` vẫn update mỗi lần eval cải thiện)
@@ -302,8 +302,8 @@ cells.append(
 
 
 N_GPU = 1
-BATCH_PER_CARD = int(globals().get("BATCH_PER_CARD_OVERRIDE", 96))
-NUM_WORKERS = int(globals().get("NUM_WORKERS_OVERRIDE", 8))
+BATCH_PER_CARD = int(globals().get("BATCH_PER_CARD_OVERRIDE", 256))
+NUM_WORKERS = int(globals().get("NUM_WORKERS_OVERRIDE", 12))
 EVAL_BATCH_PER_CARD = int(globals().get("EVAL_BATCH_PER_CARD_OVERRIDE", BATCH_PER_CARD))
 EPOCH_NUM = int(globals().get("EPOCH_NUM_OVERRIDE", 100))
 
