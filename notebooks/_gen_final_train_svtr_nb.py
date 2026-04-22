@@ -154,7 +154,7 @@ import pandas as pd
 import yaml
 from tqdm.auto import tqdm
 
-SEED = 2026
+SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 
@@ -189,7 +189,7 @@ cells.append(
     md(
         """### Bước 4 — Tải dataset từ Google Drive và giải nén
 
-Tải file `line_dataset_50k_*.tar.gz` từ Drive bằng `gdown`, giải nén vào `/workspace/`. Sau khi unpack, cấu trúc:
+Tải file `line_dataset_60k_*.tar.gz` từ Drive bằng `gdown`, giải nén vào `/workspace/`. Sau khi unpack, cấu trúc:
 
 ```
 /workspace/line_dataset/
@@ -210,8 +210,8 @@ import tarfile
 
 subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "gdown"])
 
-DRIVE_FILE_ID = "1B4ahxez3vR-haX9pOy1HOZm2zIgZjpXM"
-TAR_PATH = WORK_DIR / "line_dataset_50k.tar.gz"
+DRIVE_FILE_ID = "1JDhDDxcZwYS8KMKDjt1k62EsGFANfxSg"
+TAR_PATH = WORK_DIR / "line_dataset_60k.tar.gz"
 
 if not DATA_ROOT.exists() or not TRAIN_LABEL.exists():
     if not TAR_PATH.exists():

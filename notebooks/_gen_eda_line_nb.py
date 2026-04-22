@@ -34,7 +34,7 @@ Notebook chạy trên **Kaggle** (CPU đủ). Phân tích nhanh tập **line**: 
 - `dict_japanese.txt` — một ký tự / dòng
 
 **Đường dẫn**: mặc định dataset Kaggle  
-`/kaggle/input/datasets/narcolepsyy/jap-ocr-line/line_dataset`  
+`/kaggle/input/datasets/narcolepsyy/jap-ocr-line-60k-v2/line_dataset`  
 Nếu bạn đổi tên hoặc thêm Dataset khác, sửa biến `DATA_ROOT` trong cell import."""
     )
 )
@@ -164,9 +164,10 @@ if FONT_PATH_CJK:
 else:
     print("Warning: khong tim thay Noto CJK — bar/character cloud co the bao loi glyph.")
 
-# --- Kaggle Input (mặc định: jap-ocr-line / line_dataset) ---
+# --- Kaggle Input (mặc định: jap-ocr-line-60k-v2 / line_dataset) ---
 _CANDIDATES = [
-    Path("/kaggle/input/datasets/narcolepsyy/jap-ocr-line/line_dataset"),
+    Path("/kaggle/input/datasets/narcolepsyy/jap-ocr-line-60k-v2/line_dataset"),
+    Path("/kaggle/input/jap-ocr-line-60k-v2/line_dataset"),
     Path("/kaggle/input/line_dataset"),
     Path("/kaggle/input/line_dataset/line_dataset"),
 ]
@@ -274,13 +275,17 @@ plt.show()
 
 for name, dfi in [("train", df_train), ("val", df_val), ("test", df_test)]:
     lens = dfi["text"].str.len()
+    p95 = lens.quantile(0.95)
+    p99 = lens.quantile(0.99)
     print(
         name,
-        "mean=%.2f median=%.0f p95=%.0f max=%d"
-        % (lens.mean(), lens.median(), lens.quantile(0.95), lens.max()),
+        "mean=%.2f median=%.0f p95=%.0f p99=%.0f max=%d"
+        % (lens.mean(), lens.median(), p95, p99, lens.max()),
     )
-    hi = int((lens > lens.quantile(0.99)).sum())
-    print("  samples > p99 length:", hi)"""
+    hi = int((lens > p99).sum())
+    print(f"  samples > p99 length ({p99:.0f} chars): {hi}")
+    over_80 = int((lens > 80).sum())
+    print(f"  samples > 80 chars (SVTR T cap): {over_80} ({over_80 / max(len(lens), 1) * 100:.2f}%)")"""
     )
 )
 
@@ -398,7 +403,7 @@ cells.append(
     md(
         """### EDA 5 — Ảnh: chiều rộng, cao, aspect ratio
 
-Đọc kích thước từng ảnh (có `tqdm`). Có thể lâu với ~50k ảnh; giới hạn `MAX_IMAGES_PER_SPLIT = None` để quét hết, hoặc số nguyên để sample."""
+Đọc kích thước từng ảnh (có `tqdm`). Có thể lâu với ~60k ảnh; giới hạn `MAX_IMAGES_PER_SPLIT = None` để quét hết, hoặc số nguyên để sample."""
     )
 )
 

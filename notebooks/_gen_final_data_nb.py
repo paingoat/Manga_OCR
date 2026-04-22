@@ -25,10 +25,14 @@ cells.append(
     md(
         r"""# `final_data.ipynb` — Chuẩn bị dữ liệu (bubble + line)
 
-Notebook chạy trên **Kaggle**: tải Manga109-s (HF), build nguồn `rec`, xuất **hai bộ** ảnh crop (bubble) và ảnh đã preprocess (line), tối đa **50.000** mẫu, chia **train / val / test = 80% / 10% / 10%**.
+Notebook chạy trên **Kaggle**: tải Manga109-s (HF), build nguồn `rec`, xuất **hai bộ** ảnh crop (bubble) và ảnh đã preprocess (line), **đúng 60.000** mẫu sau dedup, chia **train / val / test = 80% / 10% / 10%**.
 
 - **Seed `42`**: `random` và `numpy` dùng cùng seed để tái lập shuffle/split.
 - **Output gốc**: `/kaggle/working/final_data/` (`bubble_dataset/`, `line_dataset/`).
+- **Lọc nhãn**: bỏ mẫu có nhãn ≤ 1 ký tự, bỏ mẫu có nhãn `> 80` ký tự (khớp giới hạn CTC của SVTR với `REC_IMAGE_SHAPE=[3,32,320]` → `T=80`), và bỏ mẫu chỉ gồm dấu câu/ký hiệu (không chứa chữ/kana/kanji/chữ số).
+- **Khử trùng lặp**: khử trùng lặp `(rel_path, text)` trước khi lấy mẫu và khử trùng lặp theo nội dung ảnh (MD5) khi ghi.
+- **Loại furigana**: áp lọc furigana cho **cả ảnh dọc lẫn ảnh ngang** (drop interval có span `< furigana_ratio × max_span`).
+- **Over-sample 1.1×** rồi **cap về 60k**: xử lý `int(MAX_SAMPLES × OVERSAMPLE_FACTOR)` mẫu vào thư mục `_staging/`, cắt đúng 60k, rồi mới split 80/10/10 và rename sang `train/val/test/`.
 - **Không** cài Paddle/torch hay clone PaddleOCR — chỉ phục vụ chuẩn bị dữ liệu."""
     )
 )
@@ -108,11 +112,12 @@ import re
 import json
 import random
 import shutil
+import hashlib
 import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -126,7 +131,8 @@ OUTPUT_ROOT = Path("/kaggle/working/final_data")
 BUBBLE_ROOT = OUTPUT_ROOT / "bubble_dataset"
 LINE_ROOT = OUTPUT_ROOT / "line_dataset"
 
-MAX_SAMPLES = 50_000
+MAX_SAMPLES = 60_000
+OVERSAMPLE_FACTOR = 1.1  # process 10% more to absorb MD5 dedup / decode loss, then cap to MAX_SAMPLES
 TRAIN_RATIO, VAL_RATIO, TEST_RATIO = 0.8, 0.1, 0.1
 
 for root in (BUBBLE_ROOT, LINE_ROOT):
@@ -246,7 +252,7 @@ def _find_existing_rec_root() -> Optional[Path]:
     return None
 
 
-def _build_rec_from_manga109s(dataset_root: Path, out_root: Path, max_samples: int = 120_000) -> Path:
+def _build_rec_from_manga109s(dataset_root: Path, out_root: Path, max_samples: int = 150_000) -> Path:
     annotations_dir = dataset_root / "annotations"
     images_dir = dataset_root / "images"
     if not annotations_dir.exists() or not images_dir.exists():
@@ -303,7 +309,7 @@ if resolved is None:
     if "DATASET_ROOT" in globals() and Path(DATASET_ROOT).exists():
         auto_out = Path("/kaggle/working/train_data/rec")
         print("Building rec from Manga109-s XML...")
-        resolved = _build_rec_from_manga109s(Path(DATASET_ROOT), auto_out, max_samples=120_000)
+        resolved = _build_rec_from_manga109s(Path(DATASET_ROOT), auto_out, max_samples=150_000)
     else:
         raise FileNotFoundError(
             "No rec_gt_train.txt and DATASET_ROOT missing. Run HF download + extract first."
@@ -323,7 +329,7 @@ with open(SRC_LABEL, "r", encoding="utf-8") as f:
     )
 )
 
-# --- Preprocess with horizontal branch ---
+# --- Preprocess with horizontal branch (row projection + furigana removal) ---
 PRE = r'''from dataclasses import dataclass
 
 
@@ -337,8 +343,11 @@ class BubbleLineConfig:
     min_gap_width: int = 3
     min_col_width: int = 4
     sort_right_to_left: bool = True
-    # width >= height * horizontal_ratio => treat as horizontal line (no column rotation)
+    # width >= height * horizontal_ratio => treat as horizontal line (row projection)
     horizontal_ratio: float = 1.15
+    # Rows whose height < max_row_height * furigana_ratio are considered furigana and dropped
+    furigana_ratio: float = 0.7
+    min_row_height: int = 6
 
 
 def normalize_text(text: str) -> str:
@@ -386,11 +395,12 @@ def find_gap_runs(gap_mask: np.ndarray, min_width: int) -> List[Tuple[int, int]]
     return runs
 
 
-def vertical_projection_intervals(mask: np.ndarray, cfg: BubbleLineConfig) -> List[Tuple[int, int]]:
-    profile = mask.sum(axis=0).astype(np.float32)
+def _projection_intervals(
+    profile: np.ndarray, axis_length: int, cfg: BubbleLineConfig, min_span: int
+) -> List[Tuple[int, int]]:
     active = profile[profile > 0]
     if active.size == 0:
-        return [(0, mask.shape[1])]
+        return [(0, axis_length)]
 
     th = float(np.percentile(active, cfg.gap_percentile) * cfg.gap_scale)
     gap_mask = profile <= th
@@ -399,18 +409,50 @@ def vertical_projection_intervals(mask: np.ndarray, cfg: BubbleLineConfig) -> Li
     cuts = [0]
     for g0, g1 in gaps:
         cuts.append((g0 + g1) // 2)
-    cuts.append(mask.shape[1])
+    cuts.append(axis_length)
     cuts = sorted(set(cuts))
 
     intervals: List[Tuple[int, int]] = []
     for i in range(len(cuts) - 1):
-        x0, x1 = cuts[i], cuts[i + 1]
-        if x1 - x0 >= cfg.min_col_width:
-            intervals.append((x0, x1))
+        a, b = cuts[i], cuts[i + 1]
+        if b - a >= min_span:
+            intervals.append((a, b))
 
     if not intervals:
-        intervals = [(0, mask.shape[1])]
+        intervals = [(0, axis_length)]
     return intervals
+
+
+def vertical_projection_intervals(mask: np.ndarray, cfg: BubbleLineConfig) -> List[Tuple[int, int]]:
+    profile = mask.sum(axis=0).astype(np.float32)
+    return _projection_intervals(profile, mask.shape[1], cfg, cfg.min_col_width)
+
+
+def horizontal_projection_rows(mask: np.ndarray, cfg: BubbleLineConfig) -> List[Tuple[int, int]]:
+    profile = mask.sum(axis=1).astype(np.float32)
+    return _projection_intervals(profile, mask.shape[0], cfg, cfg.min_row_height)
+
+
+def filter_thin_intervals(
+    intervals: List[Tuple[int, int]], cfg: BubbleLineConfig
+) -> List[Tuple[int, int]]:
+    """Drop intervals whose span (b - a) is below ``furigana_ratio * max_span``.
+
+    Works for both row intervals (horizontal branch) and column intervals (vertical branch).
+    Rationale: furigana forms a thinner row above / column beside the main text.
+    """
+    if len(intervals) <= 1:
+        return intervals
+    spans = [b - a for a, b in intervals]
+    max_span = max(spans)
+    if max_span <= 0:
+        return intervals
+    th = max_span * cfg.furigana_ratio
+    kept = [iv for iv, s in zip(intervals, spans) if s >= th]
+    return kept if kept else intervals
+
+
+filter_furigana_rows = filter_thin_intervals
 
 
 def crop_fg_y(mask: np.ndarray, x0: int, x1: int) -> Optional[Tuple[int, int]]:
@@ -422,6 +464,14 @@ def crop_fg_y(mask: np.ndarray, x0: int, x1: int) -> Optional[Tuple[int, int]]:
     return y0, y1
 
 
+def crop_fg_x(mask: np.ndarray, y0: int, y1: int) -> Optional[Tuple[int, int]]:
+    row = mask[y0:y1, :]
+    xs = np.where(row.sum(axis=0) > 0)[0]
+    if xs.size == 0:
+        return None
+    return int(xs.min()), int(xs.max()) + 1
+
+
 def rotate_and_resize_column(col_img: np.ndarray, target_h: int) -> np.ndarray:
     rot = cv2.rotate(col_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
     h, w = rot.shape[:2]
@@ -431,10 +481,52 @@ def rotate_and_resize_column(col_img: np.ndarray, target_h: int) -> np.ndarray:
     return cv2.resize(rot, (new_w, target_h), interpolation=cv2.INTER_LINEAR)
 
 
+def resize_row_to_target(row_img: np.ndarray, target_h: int) -> np.ndarray:
+    h, w = row_img.shape[:2]
+    if h <= 0 or w <= 0:
+        return row_img
+    new_w = max(1, int(round(w * (target_h / h))))
+    return cv2.resize(row_img, (new_w, target_h), interpolation=cv2.INTER_LINEAR)
+
+
 def _resize_whole_to_line(bgr: np.ndarray, cfg: BubbleLineConfig) -> np.ndarray:
     h, w = bgr.shape[:2]
     new_w = max(1, int(round(w * (cfg.target_h / max(1, h)))))
     return cv2.resize(bgr, (new_w, cfg.target_h), interpolation=cv2.INTER_LINEAR)
+
+
+def _concat_with_spacers(pieces: List[np.ndarray], cfg: BubbleLineConfig) -> np.ndarray:
+    spacer = np.full((cfg.target_h, cfg.spacer_px, 3), 255, dtype=np.uint8)
+    parts: List[np.ndarray] = []
+    for i, piece in enumerate(pieces):
+        parts.append(piece)
+        if i < len(pieces) - 1:
+            parts.append(spacer)
+    return np.concatenate(parts, axis=1)
+
+
+def _horizontal_line_from_rows(
+    bgr: np.ndarray, cleaned: np.ndarray, cfg: BubbleLineConfig
+) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
+    """Row-projection split on horizontal bubble, drop furigana rows, concatenate main rows."""
+    rows = horizontal_projection_rows(cleaned, cfg)
+    rows = filter_thin_intervals(rows, cfg)
+    rows = sorted(rows, key=lambda t: t[0])
+
+    pieces: List[np.ndarray] = []
+    for y0, y1 in rows:
+        x_rng = crop_fg_x(cleaned, y0, y1)
+        if x_rng is None:
+            continue
+        x0, x1 = x_rng
+        crop = bgr[y0:y1, x0:x1]
+        if crop.size == 0:
+            continue
+        pieces.append(resize_row_to_target(crop, cfg.target_h))
+
+    if not pieces:
+        return _resize_whole_to_line(bgr, cfg), rows
+    return _concat_with_spacers(pieces, cfg), rows
 
 
 def bubble_to_line_image(bgr: np.ndarray, cfg: BubbleLineConfig) -> Dict[str, np.ndarray]:
@@ -445,8 +537,10 @@ def bubble_to_line_image(bgr: np.ndarray, cfg: BubbleLineConfig) -> Dict[str, np
     cleaned = remove_small_components(bw, cfg.min_component_area)
 
     if is_horizontal:
-        line = _resize_whole_to_line(bgr, cfg)
+        line, rows = _horizontal_line_from_rows(bgr, cleaned, cfg)
         debug = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+        for y0, y1 in rows:
+            cv2.rectangle(debug, (0, y0), (debug.shape[1] - 1, y1), (0, 255, 255), 1)
         return {
             "binary": bw,
             "cleaned": cleaned,
@@ -455,6 +549,7 @@ def bubble_to_line_image(bgr: np.ndarray, cfg: BubbleLineConfig) -> Dict[str, np
         }
 
     intervals = vertical_projection_intervals(cleaned, cfg)
+    intervals = filter_thin_intervals(intervals, cfg)
 
     if cfg.sort_right_to_left:
         intervals = sorted(intervals, key=lambda x: x[0], reverse=True)
@@ -475,13 +570,7 @@ def bubble_to_line_image(bgr: np.ndarray, cfg: BubbleLineConfig) -> Dict[str, np
     if not columns:
         line = _resize_whole_to_line(bgr, cfg)
     else:
-        spacer = np.full((cfg.target_h, cfg.spacer_px, 3), 255, dtype=np.uint8)
-        parts = []
-        for i, c in enumerate(columns):
-            parts.append(c)
-            if i < len(columns) - 1:
-                parts.append(spacer)
-        line = np.concatenate(parts, axis=1)
+        line = _concat_with_spacers(columns, cfg)
 
     debug = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
     for x0, x1 in intervals:
@@ -496,10 +585,12 @@ def bubble_to_line_image(bgr: np.ndarray, cfg: BubbleLineConfig) -> Dict[str, np
 
 cells.append(
     md(
-        """### Bước 7 — Preprocess bubble → line (có nhánh ảnh ngang)
+        """### Bước 7 — Preprocess bubble → line (lọc furigana cho cả hai chiều)
 
-- Ảnh **đủ rộng** so với cao (`width >= height * horizontal_ratio`, mặc định 1.15): coi là chữ **ngang**, **không** xoay cột — chỉ resize cả ảnh về chiều cao `target_h` như một dòng.
-- Ngược lại: projection dọc, xoay từng cột CCW, ghép như pipeline gốc."""
+Chung cho hai nhánh: dùng `filter_thin_intervals` để loại các interval có span `< furigana_ratio × max_span` (mặc định `0.7`) — tương ứng với furigana vì chúng luôn mảnh/ngắn hơn phần chữ chính.
+
+- **Ảnh ngang** (`width >= height * horizontal_ratio`, mặc định 1.15): projection theo trục ngang để tách thành các **dòng**, bỏ dòng furigana (height nhỏ), rồi ghép các dòng chính còn lại theo chiều ngang (có spacer trắng) thành một line duy nhất.
+- **Ảnh dọc**: projection theo trục dọc để tách thành các **cột**, bỏ cột furigana (width nhỏ), sau đó sort phải→trái, xoay từng cột CCW và ghép như pipeline gốc."""
     )
 )
 
@@ -507,13 +598,53 @@ cells.append(code(PRE))
 
 cells.append(
     md(
-        """### Bước 8 — Đọc nhãn, shuffle (seed 42), chia 80/10/10, ghi bubble + line
+        """### Bước 8 — Lọc nhãn, khử trùng lặp, over-sample 1.1×, cap 60k, split 80/10/10
 
-Hai bộ dùng **cùng thứ tự** mẫu và **cùng tên file** trong `train|val|test`. Bỏ qua mẫu không đọc được ảnh."""
+Pipeline:
+
+1. **Lọc nhãn** (`filter_and_deduplicate`): bỏ mẫu có nhãn `< 2` ký tự, bỏ mẫu có nhãn `> 80` ký tự (khớp giới hạn CTC của SVTR `REC_IMAGE_SHAPE=[3,32,320]` → `T=80`), bỏ mẫu chỉ chứa dấu câu/ký hiệu (không có chữ/kana/kanji/chữ số — ví dụ `.....` hoặc `!?.`), khử cặp `(rel_path, text)` trùng.
+2. **Shuffle** với `SEED = 42`, lấy `int(MAX_SAMPLES × OVERSAMPLE_FACTOR)` mẫu đầu tiên (mặc định 1.1× → 66 000).
+3. **Process vào staging** (`process_items_to_staging`): với mỗi mẫu, khử trùng lặp theo **MD5 của nội dung ảnh**, chạy preprocess bubble → line, ghi cặp ảnh vào `<root>/_staging/stage_NNNNNNN.png`.
+4. **Cap + split + rename** (`finalize_split_from_staging`): cắt staging về đúng `MAX_SAMPLES`, chia 80/10/10 giữ nguyên thứ tự đã shuffle, rename từng file sang `<root>/<split>/<split>_NNNNNN.png`, dọn thư mục `_staging/`.
+5. Hai bộ (`bubble_dataset`, `line_dataset`) dùng **cùng thứ tự** mẫu và **cùng tên file** trong `train|val|test`."""
     )
 )
 
-BUILD = r'''def read_label_file(label_path: Path) -> List[Tuple[str, str]]:
+BUILD = r'''# Unicode ranges that count as "textual" characters (letters / digits / kana / kanji).
+_TEXT_RANGES: Tuple[Tuple[int, int], ...] = (
+    (0x3040, 0x309F),  # Hiragana
+    (0x30A0, 0x30FF),  # Katakana
+    (0x31F0, 0x31FF),  # Katakana phonetic extensions
+    (0x3400, 0x4DBF),  # CJK Unified Ideographs Extension A
+    (0x4E00, 0x9FFF),  # CJK Unified Ideographs
+    (0xF900, 0xFAFF),  # CJK Compatibility Ideographs
+    (0xFF66, 0xFF9F),  # Halfwidth Katakana
+)
+
+MIN_LABEL_CHARS = 2
+MAX_LABEL_CHARS = 80  # upper cap matching SVTR CTC T=80 for REC_IMAGE_SHAPE=[3,32,320]
+
+
+def has_text_char(text: str) -> bool:
+    """True if ``text`` has at least one letter / digit / kana / kanji character."""
+    for ch in text:
+        code = ord(ch)
+        if any(lo <= code <= hi for lo, hi in _TEXT_RANGES):
+            return True
+        if ch.isalnum():
+            return True
+    return False
+
+
+def is_label_valid(
+    text: str,
+    min_chars: int = MIN_LABEL_CHARS,
+    max_chars: int = MAX_LABEL_CHARS,
+) -> bool:
+    return min_chars <= len(text) <= max_chars and has_text_char(text)
+
+
+def read_label_file(label_path: Path) -> List[Tuple[str, str]]:
     items: List[Tuple[str, str]] = []
     with open(label_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -526,6 +657,41 @@ BUILD = r'''def read_label_file(label_path: Path) -> List[Tuple[str, str]]:
                 continue
             items.append((rel_path, text))
     return items
+
+
+def filter_and_deduplicate(
+    items: List[Tuple[str, str]],
+    min_chars: int = MIN_LABEL_CHARS,
+    max_chars: int = MAX_LABEL_CHARS,
+) -> Tuple[List[Tuple[str, str]], Dict[str, int]]:
+    """Drop too-short / too-long / non-textual labels and exact (rel_path, text) duplicates."""
+    stats = {
+        "input": len(items),
+        "dropped_short": 0,
+        "dropped_long": 0,
+        "dropped_nontext": 0,
+        "dropped_dup_pair": 0,
+    }
+    seen_pairs: Set[Tuple[str, str]] = set()
+    kept: List[Tuple[str, str]] = []
+    for rel_path, text in items:
+        if len(text) < min_chars:
+            stats["dropped_short"] += 1
+            continue
+        if len(text) > max_chars:
+            stats["dropped_long"] += 1
+            continue
+        if not has_text_char(text):
+            stats["dropped_nontext"] += 1
+            continue
+        key = (rel_path, text)
+        if key in seen_pairs:
+            stats["dropped_dup_pair"] += 1
+            continue
+        seen_pairs.add(key)
+        kept.append((rel_path, text))
+    stats["kept"] = len(kept)
+    return kept, stats
 
 
 def split_three(
@@ -557,26 +723,48 @@ def write_split_labels(
     _write(root / "rec_gt_test.txt", test_pairs)
 
 
-def process_split(
-    split_name: str,
-    split_items: List[Tuple[str, str]],
+STAGING_DIR_NAME = "_staging"
+
+
+def process_items_to_staging(
+    items: List[Tuple[str, str]],
     src_img_root: Path,
     bubble_root: Path,
     line_root: Path,
     cfg: BubbleLineConfig,
-) -> List[Tuple[str, str]]:
+    seen_image_hashes: Set[str],
+) -> Tuple[List[Tuple[str, str]], int]:
+    """Process ``items`` and write successful pairs to ``<root>/_staging/``.
+
+    Returns a list of ``(stage_name, text)`` in the same shuffled order as ``items`` and the
+    number of samples dropped because their image bytes collided with a previously-seen MD5.
+    """
+    staging_b = bubble_root / STAGING_DIR_NAME
+    staging_l = line_root / STAGING_DIR_NAME
+    staging_b.mkdir(parents=True, exist_ok=True)
+    staging_l.mkdir(parents=True, exist_ok=True)
+
     out_pairs: List[Tuple[str, str]] = []
     k = 0
-    for rel_path, text in tqdm(split_items, desc=f"Build {split_name}"):
+    dup_content = 0
+    for rel_path, text in tqdm(items, desc="Build staging"):
         src_path = src_img_root / rel_path
+        try:
+            raw_bytes = src_path.read_bytes()
+        except Exception:
+            continue
+        digest = hashlib.md5(raw_bytes).hexdigest()
+        if digest in seen_image_hashes:
+            dup_content += 1
+            continue
         img = cv2.imread(str(src_path), cv2.IMREAD_COLOR)
         if img is None:
             continue
         proc = bubble_to_line_image(img, cfg)
         k += 1
-        out_name = f"{split_name}_{k:06d}.png"
-        b_dst = bubble_root / split_name / out_name
-        l_dst = line_root / split_name / out_name
+        stage_name = f"stage_{k:07d}.png"
+        b_dst = staging_b / stage_name
+        l_dst = staging_l / stage_name
         try:
             shutil.copy2(src_path, b_dst)
         except Exception:
@@ -586,8 +774,49 @@ def process_split(
             b_dst.unlink(missing_ok=True)
             k -= 1
             continue
-        out_pairs.append((f"{split_name}/{out_name}", text))
-    return out_pairs
+        seen_image_hashes.add(digest)
+        out_pairs.append((stage_name, text))
+    return out_pairs, dup_content
+
+
+def _cleanup_staging(bubble_root: Path, line_root: Path) -> None:
+    for root in (bubble_root, line_root):
+        staging = root / STAGING_DIR_NAME
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def finalize_split_from_staging(
+    staging_pairs: List[Tuple[str, str]],
+    bubble_root: Path,
+    line_root: Path,
+    max_samples: int,
+) -> Dict[str, List[Tuple[str, str]]]:
+    """Cap to ``max_samples``, split 80/10/10 and move staging files to final split dirs."""
+    capped = staging_pairs[:max_samples]
+    extras = staging_pairs[max_samples:]
+
+    for stage_name, _ in extras:
+        (bubble_root / STAGING_DIR_NAME / stage_name).unlink(missing_ok=True)
+        (line_root / STAGING_DIR_NAME / stage_name).unlink(missing_ok=True)
+
+    train_seg, val_seg, test_seg = split_three(capped)
+    segments = {"train": train_seg, "val": val_seg, "test": test_seg}
+
+    final_pairs: Dict[str, List[Tuple[str, str]]] = {"train": [], "val": [], "test": []}
+    for split_name, seg in segments.items():
+        for i, (stage_name, text) in enumerate(seg, start=1):
+            final_name = f"{split_name}_{i:06d}.png"
+            for root in (bubble_root, line_root):
+                src = root / STAGING_DIR_NAME / stage_name
+                dst = root / split_name / final_name
+                if dst.exists():
+                    dst.unlink()
+                src.rename(dst)
+            final_pairs[split_name].append((f"{split_name}/{final_name}", text))
+
+    _cleanup_staging(bubble_root, line_root)
+    return final_pairs
 
 
 def build_bubble_and_line_datasets(
@@ -597,30 +826,50 @@ def build_bubble_and_line_datasets(
     line_root: Path,
     cfg: BubbleLineConfig,
     max_samples: int,
+    oversample_factor: float = OVERSAMPLE_FACTOR,
 ) -> Dict[str, object]:
     all_items = read_label_file(src_label)
     if not all_items:
         raise RuntimeError(f"No valid samples in {src_label}")
 
+    filtered, filter_stats = filter_and_deduplicate(all_items, min_chars=MIN_LABEL_CHARS)
+    if not filtered:
+        raise RuntimeError("No samples left after filter + dedup.")
+
     rng = random.Random(SEED)
-    items = all_items[:]
+    items = filtered[:]
     rng.shuffle(items)
-    selected = items[: min(max_samples, len(items))]
 
-    train_items, val_items, test_items = split_three(selected)
+    oversample_k = min(int(max_samples * oversample_factor), len(items))
+    selected = items[:oversample_k]
 
-    tr_pairs = process_split("train", train_items, src_img_root, bubble_root, line_root, cfg)
-    va_pairs = process_split("val", val_items, src_img_root, bubble_root, line_root, cfg)
-    te_pairs = process_split("test", test_items, src_img_root, bubble_root, line_root, cfg)
+    _cleanup_staging(bubble_root, line_root)
 
-    write_split_labels(bubble_root, tr_pairs, va_pairs, te_pairs)
-    write_split_labels(line_root, tr_pairs, va_pairs, te_pairs)
+    seen_hashes: Set[str] = set()
+    staging_pairs, dup_content = process_items_to_staging(
+        selected, src_img_root, bubble_root, line_root, cfg, seen_hashes
+    )
+
+    final_pairs = finalize_split_from_staging(
+        staging_pairs, bubble_root, line_root, max_samples
+    )
+
+    write_split_labels(
+        bubble_root, final_pairs["train"], final_pairs["val"], final_pairs["test"]
+    )
+    write_split_labels(
+        line_root, final_pairs["train"], final_pairs["val"], final_pairs["test"]
+    )
 
     return {
-        "selected": len(selected),
-        "train_written": len(tr_pairs),
-        "val_written": len(va_pairs),
-        "test_written": len(te_pairs),
+        "filter": filter_stats,
+        "oversample_target": oversample_k,
+        "staging_written": len(staging_pairs),
+        "dropped_dup_image": dup_content,
+        "capped_to": min(max_samples, len(staging_pairs)),
+        "train_written": len(final_pairs["train"]),
+        "val_written": len(final_pairs["val"]),
+        "test_written": len(final_pairs["test"]),
     }
 
 
@@ -680,8 +929,8 @@ PACK_DIR = Path("/kaggle/working")
 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 for stem, root in (
-    ("bubble_dataset_50k", BUBBLE_ROOT),
-    ("line_dataset_50k", LINE_ROOT),
+    ("bubble_dataset_60k", BUBBLE_ROOT),
+    ("line_dataset_60k", LINE_ROOT),
 ):
     out_path = PACK_DIR / f"{stem}_{ts}.tar.gz"
     with tarfile.open(out_path, "w:gz") as tar:
