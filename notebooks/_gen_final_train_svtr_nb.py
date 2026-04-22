@@ -1026,9 +1026,15 @@ cells.append(
 
 cells.append(
     md(
-        """### Bước 12 — Đóng gói artifact `.tar.gz` để tải về
+        """### Bước 12 — Đóng gói hai bản `.tar.gz` (deploy + resume)
 
-Gom các file/thư mục quan trọng (config, log, metric, predictions, best checkpoint, inference model, dict) vào `/workspace/svtr_tiny_artifacts_{timestamp}.tar.gz`."""
+Tạo **hai** file nén có timestamp trong `/workspace`:
+
+- **`svtr_tiny_deploy_{timestamp}.tar.gz`** — mang đi **infer / đánh giá**: config YAML, `train.log`, metric test (`eval_test_em_cer_ned.json`), log/kết quả predict, thư mục `output/inference/`, `best_accuracy.pdparams`, `output/config.yml`, `dict_japanese.txt`. Không gồm `best_accuracy.pdopt`/`.states` (thường không cần cho inference-only).
+
+- **`svtr_tiny_resume_{timestamp}.tar.gz`** — để **tiếp tục train** (Bước 11): thêm đủ `best_accuracy.*` và `latest.*` (`.pdparams`, `.pdopt`, `.states`), cùng config/log/metric/dict như trên.
+
+Cell in ra kích thước từng mục, liệt kê path còn thiếu; với bản resume, các file `latest.*` được đánh dấu **[CRITICAL]** nếu không có — khi đó archive resume **không đủ** để resume từ `latest` (cần kiểm tra `save_epoch_step`, thời điểm early-stop, v.v.)."""
     )
 )
 
@@ -1040,44 +1046,98 @@ from datetime import datetime
 EXP_ROOT = OUTPUT_ROOT
 PACK_DIR = WORK_DIR
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-ARCHIVE_PATH = PACK_DIR / f"svtr_tiny_artifacts_{timestamp}.tar.gz"
 
-targets = [
+DEPLOY_ARCHIVE = PACK_DIR / f"svtr_tiny_deploy_{timestamp}.tar.gz"
+RESUME_ARCHIVE = PACK_DIR / f"svtr_tiny_resume_{timestamp}.tar.gz"
+
+OUT_DIR = EXP_ROOT / "output"
+
+deploy_targets = [
     CONFIG_PATH,
-    TRAIN_LOG,
     EVAL_JSON,
     PRED_RAW,
     PRED_RES,
-    EXP_ROOT / "output" / "best_accuracy.pdparams",
-    EXP_ROOT / "output" / "best_accuracy.pdopt",
-    EXP_ROOT / "output" / "best_accuracy.states",
-    EXP_ROOT / "output" / "config.yml",
-    EXP_ROOT / "output" / "inference",
+    TRAIN_LOG,
+    OUT_DIR / "inference",
+    OUT_DIR / "best_accuracy.pdparams",
+    OUT_DIR / "config.yml",
     DICT_PATH,
 ]
 
-existing = [p for p in targets if p.exists()]
-missing = [p for p in targets if not p.exists()]
+resume_targets = [
+    CONFIG_PATH,
+    TRAIN_LOG,
+    EVAL_JSON,
+    OUT_DIR / "best_accuracy.pdparams",
+    OUT_DIR / "best_accuracy.pdopt",
+    OUT_DIR / "best_accuracy.states",
+    OUT_DIR / "latest.pdparams",
+    OUT_DIR / "latest.pdopt",
+    OUT_DIR / "latest.states",
+    OUT_DIR / "config.yml",
+    DICT_PATH,
+]
 
-print("Will pack:")
-for p in existing:
-    print(" -", p)
+critical_resume = {
+    OUT_DIR / "best_accuracy.pdparams",
+    OUT_DIR / "latest.pdparams",
+    OUT_DIR / "latest.pdopt",
+    OUT_DIR / "latest.states",
+}
 
-if missing:
-    print("\nMissing (skip):")
-    for p in missing:
-        print(" -", p)
 
-with tarfile.open(ARCHIVE_PATH, "w:gz") as tar:
+def _human_mb(p):
+    return round(p.stat().st_size / (1024 ** 2), 2) if p.exists() and p.is_file() else None
+
+
+def _pack(archive_path, targets, label):
+    existing = [p for p in targets if p.exists()]
+    missing = [p for p in targets if not p.exists()]
+
+    print(f"\n=== {label} -> {archive_path.name} ===")
+    print("Will pack:")
     for p in existing:
-        try:
-            arcname = p.relative_to(WORK_DIR)
-        except ValueError:
-            arcname = p.name
-        tar.add(p, arcname=str(arcname))
+        size = _human_mb(p)
+        size_str = f"{size:>8.2f} MB" if size is not None else "   <dir>   "
+        print(f"  {size_str}  {p}")
 
-print("\nArchive ready:", ARCHIVE_PATH)
-print("Size (MB):", round(ARCHIVE_PATH.stat().st_size / (1024 ** 2), 2))"""
+    if missing:
+        print("\nMissing (skip):")
+        for p in missing:
+            tag = " [CRITICAL]" if p in critical_resume else ""
+            print(f"  -{tag} {p}")
+
+    with tarfile.open(archive_path, "w:gz") as tar:
+        for p in existing:
+            try:
+                arcname = p.relative_to(WORK_DIR)
+            except ValueError:
+                arcname = p.name
+            tar.add(p, arcname=str(arcname))
+
+    size_mb = round(archive_path.stat().st_size / (1024 ** 2), 2)
+    print(f"\n{label} archive ready: {archive_path}  ({size_mb} MB)")
+    return missing
+
+
+miss_deploy = _pack(DEPLOY_ARCHIVE, deploy_targets, "DEPLOY")
+miss_resume = _pack(RESUME_ARCHIVE, resume_targets, "RESUME")
+
+missing_critical = [p for p in miss_resume if p in critical_resume]
+if missing_critical:
+    print("\n[WARN] Missing CRITICAL files for resume:")
+    for p in missing_critical:
+        print("  -", p)
+    print(
+        "  -> Resume archive will NOT be able to resume training from 'latest'.\n"
+        "     Check why PaddleOCR did not save latest.* (save_epoch_step, early-stop timing, etc.)."
+    )
+else:
+    print("\n[OK] Resume archive contains best_accuracy.* and latest.* — Step 11 should work.")
+
+print("\nAll archives:")
+print(" - deploy :", DEPLOY_ARCHIVE)
+print(" - resume :", RESUME_ARCHIVE)"""
     )
 )
 
