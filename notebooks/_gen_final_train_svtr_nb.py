@@ -90,13 +90,39 @@ Clone về `/workspace/PaddleOCR`. Bỏ qua nếu thư mục đã tồn tại.""
 cells.append(
     code(
         r"""import os
+import sys
+import subprocess
 from pathlib import Path
 
 PADDLEOCR_DIR_BOOTSTRAP = Path("/workspace/PaddleOCR")
 if not PADDLEOCR_DIR_BOOTSTRAP.is_dir():
     !git clone --depth 1 https://github.com/PaddlePaddle/PaddleOCR.git {PADDLEOCR_DIR_BOOTSTRAP}
 
-!pip install -q -r {PADDLEOCR_DIR_BOOTSTRAP}/requirements.txt
+# Use sys.executable -m pip to install into the SAME Python env as the kernel
+# (otherwise `pip` on PATH may belong to a different environment and PaddleOCR
+# deps like scikit-image / imgaug / lmdb / rapidfuzz will be missing at runtime).
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install", "-q",
+    "-r", str(PADDLEOCR_DIR_BOOTSTRAP / "requirements.txt"),
+])
+
+# Safety net: explicitly ensure packages that PaddleOCR imports at startup but
+# are sometimes missing from its requirements on certain environments.
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install", "-q",
+    "scikit-image", "imgaug", "lmdb", "rapidfuzz", "Polygon3",
+    "pyclipper", "shapely", "opencv-contrib-python",
+])
+
+# Verify key imports resolve in this kernel.
+import importlib
+for _mod in ("skimage", "imgaug", "lmdb", "rapidfuzz", "pyclipper", "shapely"):
+    try:
+        importlib.import_module(_mod)
+        print(f"  import {_mod:<10s} OK")
+    except Exception as _e:
+        print(f"  import {_mod:<10s} FAILED: {_e}")
+
 print("PaddleOCR ready:", PADDLEOCR_DIR_BOOTSTRAP)"""
     )
 )
