@@ -1,0 +1,31 @@
+model:
+  name: svtr
+  display_name: SVTR Tiny Line
+
+paths:
+  input_dir: input/bubble
+  output_root: output
+  paddleocr_dir: PaddleOCR
+  model_dir: models/svtr_tiny_line/inference
+  dict_path: models/svtr_tiny_line/dict_japanese.txt
+
+paddleocr:
+  rec_algorithm: SVTR
+  rec_image_shape: "3,32,320"
+  use_space_char: false
+  use_gpu: false
+  enable_mkldnn: false
+
+preprocess:
+  target_h: 32
+  spacer_px: 8
+  min_component_area: 10
+  gap_percentile: 18.0
+  gap_scale: 1.0
+  min_gap_width: 3
+  min_col_width: 4
+  sort_right_to_left: true
+  horizontal_ratio: 1.15
+  furigana_ratio: 0.7
+  min_row_height: 6
+

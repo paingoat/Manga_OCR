@@ -4,5 +4,9 @@ archives/
 PaddleOCR/
 .vscode/
 .cursorignore
+deploy_file/
+output/
+input/bubble/*
+!input/bubble/.gitkeep
 
 .env    
