@@ -8,5 +8,9 @@ deploy_file/
 output/
 input/bubble/*
 !input/bubble/.gitkeep
-
+!input/bubble/test1.png
+!input/bubble/test2.png
+!input/bubble/test3.png
+!input/bubble/test4.png
+!input/bubble/test5.png
 .env    
