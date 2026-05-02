@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -23,6 +24,13 @@ class PaddleRecConfig:
 
 def _bool_arg(value: bool) -> str:
     return "True" if value else "False"
+
+
+def _utf8_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    return env
 
 
 def build_predict_command(
@@ -76,10 +84,12 @@ def run_predict_rec_on_dir(
     out_res_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd_with_save = build_predict_command(cfg, image_dir, out_res_path)
+    env = _utf8_subprocess_env()
     with open(out_log_path, "w", encoding="utf-8") as fw:
         rc = subprocess.run(
             cmd_with_save,
             cwd=str(cfg.paddleocr_dir),
+            env=env,
             stdout=fw,
             stderr=subprocess.STDOUT,
             check=False,
@@ -96,6 +106,7 @@ def run_predict_rec_on_dir(
             rc2 = subprocess.run(
                 base_cmd,
                 cwd=str(cfg.paddleocr_dir),
+                env=env,
                 stdout=fw,
                 stderr=subprocess.STDOUT,
                 check=False,

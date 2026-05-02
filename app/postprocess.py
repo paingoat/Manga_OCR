@@ -62,7 +62,7 @@ def parse_predict_lines(lines: Iterable[str]) -> List[Dict[str, object]]:
     )
     patterns = [
         re.compile(
-            rf"Predicts\s+of\s+(?P<path>.+?\.{IMAGE_EXT_RE}):(?P<tpl>\(.*\))$",
+            rf"(?:Message:\s*[\"'])?Predicts\s+of\s+(?P<path>.+?\.{IMAGE_EXT_RE}):(?P<tpl>\(.*\))[\"']?$",
             re.IGNORECASE,
         ),
         re.compile(

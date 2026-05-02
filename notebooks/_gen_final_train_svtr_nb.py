@@ -290,7 +290,7 @@ Profile cho RTX 3090 24GB:
 - `eval_step = max(200, steps_per_epoch)` (eval mỗi ~1 epoch)
 - `save_epoch_step = 5` (snapshot định kỳ mỗi 5 epoch; `best_accuracy` vẫn update mỗi lần eval cải thiện)
 - `Metric.main_indicator = norm_edit_dis` (≡ `1 − NED`, sát với metric đánh giá cuối)
-- Architecture được lấy trực tiếp từ YAML đi kèm pretrained để khớp shape."""
+- Architecture được lấy từ YAML pretrained, sau đó override `out_char_num=80` (khớp `max_text_length=80`; last stage chỉ pool H, giữ nguyên W=80 timestep cho CTC)."""
     )
 )
 
@@ -349,6 +349,12 @@ def _load_pretrained_svtr_architecture(pretrained_root: Path) -> Dict:
 
 
 architecture_cfg = _load_pretrained_svtr_architecture(PRETRAINED_ROOT)
+
+backbone = architecture_cfg.get("Backbone", {})
+old_ocn = backbone.get("out_char_num")
+backbone["out_char_num"] = 80
+print(f"Override out_char_num: {old_ocn} -> {backbone['out_char_num']}"
+      " (match max_text_length=80, pool H only at last stage)")
 
 cfg = {
     "Global": {
