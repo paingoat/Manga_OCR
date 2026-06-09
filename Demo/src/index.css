@@ -1,0 +1,67 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "monospace";
+
+  --color-background: #F8FAFC;
+  --color-surface: #FFFFFF;
+  --color-surface-container-low: #FFFFFF;
+  --color-surface-container: #F1F5F9;
+  --color-surface-container-high: #E2E8F0;
+  --color-surface-container-highest: #CBD5E1;
+  
+  --color-primary: #4F46E5;
+  --color-primary-container: #EEF2FF;
+  --color-on-primary: #FFFFFF;
+  --color-on-primary-container: #4F46E5;
+
+  --color-on-surface: #1E293B;
+  --color-on-surface-variant: #64748B;
+  --color-outline: #94A3B8;
+  --color-outline-variant: #E2E8F0;
+
+  --color-success: #16A34A;
+  --color-warning: #D97706;
+  --color-error: #DC2626;
+
+  --radius-sm: 0.375rem;
+  --radius-default: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+
+  --shadow-card: 0 1px 3px 0 rgba(0,0,0,0.1), 0 1px 2px -1px rgba(0,0,0,0.1);
+  --shadow-header: 0 1px 2px 0 rgba(0,0,0,0.05);
+}
+
+@layer base {
+  body {
+    @apply bg-background text-on-surface font-sans antialiased;
+  }
+}
+
+.card-polish {
+  @apply bg-surface border border-outline-variant rounded-xl shadow-[var(--shadow-card)];
+}
+
+.sidebar-active {
+  @apply bg-primary-container text-primary border-r-4 border-primary;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-outline-variant);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-outline);
+}

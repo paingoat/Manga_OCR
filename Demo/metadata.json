@@ -1,0 +1,6 @@
+{
+  "name": "MangaOCR Pipeline",
+  "description": "An AI-powered pipeline for manga text recognition, including detection, cropping, orientation correction, and OCR.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

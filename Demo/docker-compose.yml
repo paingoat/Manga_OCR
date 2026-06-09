@@ -1,0 +1,13 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - VITE_GRADIO_URL=https://580b460de234765ae1.gradio.live # Thay bằng Gradio URL của bạn
+      - DISABLE_HMR=false

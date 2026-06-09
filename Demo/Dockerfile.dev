@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Sao chép package.json và lockfile để cài đặt trước dependencies (tối ưu cache)
+COPY package*.json ./
+RUN npm install
+
+# Sao chép toàn bộ mã nguồn
+COPY . .
+
+# Expose cổng 3000 (theo cấu hình npm run dev của dự án: vite --port=3000 --host=0.0.0.0)
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]
