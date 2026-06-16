@@ -9,5 +9,5 @@ services:
       - .:/app
       - /app/node_modules
     environment:
-      - VITE_GRADIO_URL=https://580b460de234765ae1.gradio.live # Thay bằng Gradio URL của bạn
+      - VITE_GRADIO_URL=https://bc6497f6f261f40fdc.gradio.live # Thay bằng Gradio URL của bạn
       - DISABLE_HMR=false

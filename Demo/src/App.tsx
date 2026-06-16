@@ -18,7 +18,8 @@ import {
   Copy,
   Edit2,
   Code2,
-  FileText
+  FileText,
+  Layers
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Client } from "@gradio/client";
@@ -34,8 +35,13 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Pipeline mode: 'full' (Detection + Recognition) or 'rec_only' (Recognition Only)
+  const [pipelineMode, setPipelineMode] = useState<'full' | 'rec_only'>('full');
+
   // State để lưu kết quả trả về từ Kaggle
   const [results, setResults] = useState<any>(null);
+  // State riêng cho Recognition Only mode
+  const [recOnlyResults, setRecOnlyResults] = useState<any>(null);
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -63,20 +69,30 @@ export default function App() {
 
     setIsProcessing(true);
     try {
-      // Thay URL này bằng public link bạn nhận được từ Kaggle
       const app = await Client.connect(GRADIO_URL);
 
-      const result = await app.predict("/process_image", [
-        selectedFile,      // inp_image
-        selectedModel      // inp_model
-      ]);
-
-      console.log("Gradio Output:", result.data);
-      // result.data[0]: Ảnh đã vẽ bounding box
-      // result.data[1]: Gallery các ảnh crop và text OCR
-      // result.data[2]: Chuỗi string log
-
-      setResults(result.data);
+      if (pipelineMode === 'rec_only') {
+        // Recognition Only: gọi endpoint /rec_only
+        const result = await app.predict("/rec_only", [
+          selectedFile,      // rec_image
+          selectedModel      // rec_model
+        ]);
+        console.log("Gradio Rec-Only Output:", result.data);
+        // result.data[0]: Processed strip image
+        // result.data[1]: Log string (chứa text result)
+        setRecOnlyResults(result.data);
+      } else {
+        // Full pipeline: gọi endpoint /process_image
+        const result = await app.predict("/process_image", [
+          selectedFile,      // inp_image
+          selectedModel      // inp_model
+        ]);
+        console.log("Gradio Output:", result.data);
+        // result.data[0]: Ảnh đã vẽ bounding box
+        // result.data[1]: Gallery các ảnh crop và text OCR
+        // result.data[2]: Chuỗi string log
+        setResults(result.data);
+      }
 
     } catch (error) {
       console.error("Lỗi khi kết nối Gradio:", error);
@@ -97,6 +113,37 @@ export default function App() {
             <span className="text-xl font-bold tracking-tight text-on-surface">MangaOCR</span>
           </div>
           <div className="text-on-surface-variant text-[10px] uppercase font-bold tracking-widest mt-4 pl-1">Processing Pipeline</div>
+        </div>
+
+        {/* Pipeline Mode Switcher */}
+        <div className="px-6 mb-4">
+          <label className="block text-[10px] font-bold text-outline uppercase tracking-widest mb-2">
+            Pipeline Mode
+          </label>
+          <div className="flex flex-col gap-1">
+            <button
+              onClick={() => { setPipelineMode('full'); setRecOnlyResults(null); }}
+              className={`w-full text-left px-3 py-2 text-[11px] font-bold rounded-lg transition-all flex items-center gap-2 ${
+                pipelineMode === 'full'
+                  ? 'bg-primary/10 text-primary border border-primary/30'
+                  : 'text-on-surface-variant hover:bg-slate-50 border border-transparent'
+              }`}
+            >
+              <ScanSearch size={14} />
+              Detection + Recognition
+            </button>
+            <button
+              onClick={() => { setPipelineMode('rec_only'); setResults(null); }}
+              className={`w-full text-left px-3 py-2 text-[11px] font-bold rounded-lg transition-all flex items-center gap-2 ${
+                pipelineMode === 'rec_only'
+                  ? 'bg-primary/10 text-primary border border-primary/30'
+                  : 'text-on-surface-variant hover:bg-slate-50 border border-transparent'
+              }`}
+            >
+              <Layers size={14} />
+              Recognition Only
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-col gap-1 font-sans text-sm antialiased flex-grow">
@@ -195,8 +242,12 @@ export default function App() {
                 <div className="absolute top-1/2 left-12 right-12 h-[1px] bg-outline-variant -translate-y-[100%] z-0"></div>
 
                 <PipelineStep active icon={<UploadCloud size={16} />} label="Upload" />
-                <PipelineStep icon={<ScanSearch size={16} />} label="Detect" />
-                <PipelineStep icon={<Crop size={16} />} label="Crop" />
+                {pipelineMode === 'full' && (
+                  <>
+                    <PipelineStep icon={<ScanSearch size={16} />} label="Detect" />
+                    <PipelineStep icon={<Crop size={16} />} label="Crop" />
+                  </>
+                )}
                 <PipelineStep icon={<Type size={16} />} label="OCR" />
               </div>
             </section>
@@ -240,7 +291,11 @@ export default function App() {
                       disabled={isProcessing || !selectedFile}
                       className="px-6 py-2.5 bg-primary text-white rounded-xl text-xs font-bold hover:bg-indigo-600 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isProcessing ? "Đang xử lý (GPU)..." : "Chạy AI Pipeline"}
+                      {isProcessing
+                        ? "Đang xử lý (GPU)..."
+                        : pipelineMode === 'rec_only'
+                          ? "Chạy OCR"
+                          : "Chạy AI Pipeline"}
                     </button>
                   </div>
 
@@ -262,8 +317,8 @@ export default function App() {
               </div>
             </section>
 
-            {/* 2. Text Detection Section */}
-            {/* 2. Text Detection Section */}
+            {/* 2. Text Detection Section — chỉ hiện khi mode full */}
+            {pipelineMode === 'full' && (
             <section className="card-polish overflow-hidden">
               <div className="border-b border-outline-variant px-6 py-4 bg-surface flex justify-between items-center">
                 <h3 className="text-sm font-bold text-on-surface uppercase tracking-wide flex items-center gap-3">
@@ -273,7 +328,6 @@ export default function App() {
               </div>
               <div className="p-8 flex justify-center bg-slate-50/50 min-h-[300px]">
                 <div className="relative inline-block border border-outline-variant rounded-2xl p-4 bg-white shadow-xl">
-                  {/* Trích xuất ảnh vẽ Bounding Box từ results[0] */}
                   {results && results[0] ? (
                     <img
                       src={results[0]?.url || results[0]}
@@ -288,8 +342,10 @@ export default function App() {
                 </div>
               </div>
             </section>
+            )}
 
-            {/* 3. Snippet Cropping Section */}
+            {/* 3. Snippet Cropping Section — chỉ hiện khi mode full */}
+            {pipelineMode === 'full' && (
             <section className="card-polish overflow-hidden">
               <div className="border-b border-outline-variant px-6 py-4 bg-surface flex justify-between items-center">
                 <h3 className="text-sm font-bold text-on-surface uppercase tracking-wide flex items-center gap-3">
@@ -299,7 +355,6 @@ export default function App() {
               </div>
               <div className="p-6 bg-white">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
-                  {/* Lặp qua mảng gallery crop từ results[1] */}
                   {results && results[1] ? (
                     results[1].map((item: any, index: number) => (
                       <SnippetCard
@@ -316,21 +371,48 @@ export default function App() {
                 </div>
               </div>
             </section>
+            )}
+
+            {/* Recognition Only — Processed Strip Preview */}
+            {pipelineMode === 'rec_only' && (
+            <section className="card-polish overflow-hidden">
+              <div className="border-b border-outline-variant px-6 py-4 bg-surface flex justify-between items-center">
+                <h3 className="text-sm font-bold text-on-surface uppercase tracking-wide flex items-center gap-3">
+                  <Layers className="text-primary" size={18} />
+                  2. Processed Strip
+                </h3>
+              </div>
+              <div className="p-8 flex justify-center bg-slate-50/50 min-h-[200px]">
+                <div className="relative inline-block border border-outline-variant rounded-2xl p-4 bg-white shadow-xl">
+                  {recOnlyResults && recOnlyResults[0] ? (
+                    <img
+                      src={recOnlyResults[0]?.url || recOnlyResults[0]}
+                      alt="Processed Strip"
+                      className="max-h-[300px] w-auto object-contain rounded-lg mix-blend-multiply"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-[200px] w-[300px] md:w-[500px] border-2 border-dashed border-outline-variant/50 rounded-xl text-on-surface-variant text-sm font-medium">
+                      {isProcessing ? "Đang xử lý ảnh..." : "Upload ảnh crop và chạy OCR."}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+            )}
 
             {/* 4. OCR Results */}
             <section className="card-polish overflow-hidden">
               <div className="border-b border-outline-variant px-6 py-4 bg-surface flex justify-between items-center">
                 <h3 className="text-sm font-bold text-on-surface uppercase tracking-wide flex items-center gap-3">
                   <Type className="text-primary" size={18} />
-                  4. Recognition Manifest
+                  {pipelineMode === 'rec_only' ? '3. Recognition Result' : '4. Recognition Manifest'}
                 </h3>
                 <button className="text-xs text-indigo-600 font-semibold">Validation View</button>
               </div>
               <div className="divide-y divide-outline-variant/30 bg-white">
-                {/* Lặp qua mảng gallery text từ results[1] */}
-                {results && results[1] ? (
+                {/* Mode full: lặp qua gallery từ results[1] */}
+                {pipelineMode === 'full' && results && results[1] ? (
                   results[1].map((item: any, index: number) => {
-                    // Gradio trả text trong trường caption
                     const textContent = item?.caption || "Không nhận diện được";
                     return (
                       <ResultRow
@@ -343,6 +425,20 @@ export default function App() {
                       />
                     );
                   })
+                ) : pipelineMode === 'rec_only' && recOnlyResults && recOnlyResults[1] ? (
+                  /* Mode rec_only: hiển thị 1 kết quả duy nhất */
+                  <div className="p-6 bg-white">
+                    <div className="flex items-center gap-4 mb-3">
+                      <span className="font-mono text-[10px] text-outline font-bold tracking-widest">REC_001</span>
+                      <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider flex items-center gap-1 border shadow-sm bg-green-100 text-green-700 border-green-200">
+                        <CheckCircle size={10} />
+                        OK
+                      </span>
+                    </div>
+                    <div className="text-lg font-semibold text-on-surface p-5 bg-slate-50/50 border border-outline-variant/30 rounded-2xl w-full shadow-inner">
+                      {recOnlyResults[1]}
+                    </div>
+                  </div>
                 ) : (
                   <div className="p-8 text-center text-on-surface-variant text-sm font-medium">
                     {isProcessing ? "Đang xử lý nhận diện ký tự (OCR)..." : "Chưa có kết quả OCR."}
@@ -387,6 +483,30 @@ interface SnippetCardProps {
 }
 
 function SnippetCard({ id, img }: SnippetCardProps) {
+  const handleDownload = async (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!img) return;
+    try {
+      // Thử fetch ảnh dưới dạng blob để tải trực tiếp
+      const response = await fetch(img);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `${id}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      
+      // Ngăn chặn hành vi mặc định (mở tab mới) nếu tải thành công
+      e.preventDefault();
+    } catch {
+      // Nếu lỗi CORS, trình duyệt sẽ chạy theo hành vi mặc định của thẻ <a> (mở trong tab mới)
+      console.warn("CORS block, falling back to open in new tab");
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3 group cursor-pointer">
       <div className="bg-slate-50 border border-outline-variant rounded-2xl p-4 flex justify-center items-center h-32 hover:border-primary/50 hover:bg-white hover:shadow-md transition-all overflow-hidden">
@@ -400,13 +520,22 @@ function SnippetCard({ id, img }: SnippetCardProps) {
         <span className="font-mono text-[9px] text-on-surface-variant font-bold tracking-tighter uppercase">
           {id}
         </span>
-        <button className="text-outline/50 hover:text-primary transition-colors">
+        <a
+          href={img}
+          onClick={handleDownload}
+          download={`${id}.png`}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`Tải xuống ${id}`}
+          className="text-outline/50 hover:text-primary transition-colors flex items-center justify-center"
+        >
           <Download size={14} />
-        </button>
+        </a>
       </div>
     </div>
   );
 }
+
 
 interface ResultRowProps {
   id: string;
