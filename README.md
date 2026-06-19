@@ -1,227 +1,240 @@
-# PP_OCR_JAP - Hướng Dẫn Inference
+# Nhận Diện Chữ Tiếng Nhật trong Truyện Tranh Manga
 
-README này chỉ tập trung vào phần **inference**.
+> **CS231.Q23 — Nhập Môn Thị Giác Máy Tính**  
+> Trường Đại học Công Nghệ Thông Tin, ĐHQG TP.HCM  
+> Giảng viên: **TS. Mai Tiến Dũng**
 
-Pipeline hiện hỗ trợ 2 model:
+---
 
-- `crnn`
-- `svtr`
+## Thành viên nhóm
 
-Luồng xử lý:
+| STT | Họ và tên | MSSV | Mức độ hoàn thành |
+|:---:|---|:---:|:---:|
+| 1 | Nguyễn Anh Quân | 23521259 | 100% |
+| 2 | Lê Đăng Khoa | 23520740 | 100% |
+| 3 | Nguyễn Minh Đức | 23520312 | 100% |
 
-1. Đọc ảnh bubble từ `input/bubble/`
-2. Preprocess bubble -> line
-3. Gọi PaddleOCR `predict_rec.py`
-4. Parse kết quả và ghi vào `output/<timestamp>/`
+---
 
-## 1. Cấu trúc thư mục inference
+## Tổng quan
 
-```text
-PP_OCR_JAP/
-├─ app/
-│  ├─ __init__.py
-│  ├─ infer.py                 # orchestrator end-to-end
-│  ├─ preprocess.py            # bubble -> line
-│  ├─ paddle_rec.py            # gọi PaddleOCR/tools/infer/predict_rec.py
-│  ├─ postprocess.py           # parse + normalize predictions
-│  └─ utils.py
-│
-├─ configs/
-│  ├─ infer.default.yaml       # default (CRNN-compatible)
-│  ├─ infer.crnn.yaml          # config cho CRNN
-│  └─ infer.svtr.yaml          # config cho SVTR
-│
-├─ controls/
-│  ├─ run_infer.ps1            # Windows: -Model crnn|svtr, optional -Config
-│  ├─ run_infer.sh             # Linux: MODEL=crnn|svtr, optional CONFIG
-│  └─ setup.sh
-│
-├─ models/
-│  ├─ crnn_mobile_line/
-│  │  ├─ inference/
-│  │  │  ├─ inference.json
-│  │  │  ├─ inference.pdiparams
-│  │  │  └─ inference.yml
-│  │  ├─ dict_japanese.txt
-│  │  └─ metadata/
-│  │     ├─ crnn_mobile_line.yml
-│  │     ├─ config.yml
-│  │     ├─ eval_test_em_cer_ned.json
-│  │     ├─ train.log
-│  │     └─ best_accuracy.pdparams
-│  │
-│  └─ svtr_tiny_line/
-│     ├─ inference/
-│     │  ├─ inference.json
-│     │  ├─ inference.pdiparams
-│     │  └─ inference.yml
-│     ├─ dict_japanese.txt
-│     └─ metadata/
-│        ├─ svtr_tiny_line.yml
-│        ├─ config.yml
-│        ├─ eval_test_em_cer_ned.json
-│        ├─ train.log
-│        └─ best_accuracy.pdparams
-│
-├─ PaddleOCR/
-│  └─ tools/infer/predict_rec.py
-│
-├─ input/
-│  └─ bubble/                  # ảnh bubble đầu vào (test1.png, test2.png, ...)
-│
-├─ output/
-│  ├─ .gitkeep
-│  └─ YYYYMMDD_HHMMSS/         # mỗi lần run tạo 1 thư mục timestamp
-│     ├─ line_tmp/             # ảnh line trung gian
-│     ├─ failed/               # ảnh preprocess lỗi (nếu có)
-│     ├─ pred_raw.txt          # log raw từ PaddleOCR
-│     ├─ pred_results.txt      # output save_res_path (nếu script hỗ trợ)
-│     ├─ predictions.json      # output chuẩn hóa cho app
-│     └─ manifest.json         # metadata run + timing
-│
-├─ deploy_file/                # nguồn artifact bạn đưa vào (không đụng/xóa tự động)
-└─ requirements.txt
+Đề tài tập trung vào bài toán **Text Recognition** chuyên biệt cho truyện tranh manga Nhật Bản — một miền ứng dụng đặc thù với nhiều thách thức:
+
+- Ba bảng chữ cái xen kẽ: **Hiragana, Katakana, Kanji**
+- Văn bản xuất hiện theo cả hai hướng **dọc và ngang**
+- Sự xuất hiện của **furigana** (chú âm kích thước nhỏ bên cạnh Kanji)
+- Phông chữ đa dạng, nền nhiễu, và văn bản chồng lấp với hình minh họa
+
+Nhóm nghiên cứu, triển khai và đánh giá ba kiến trúc đại diện cho hai hướng tiếp cận chính trong nhận dạng văn bản: **CRNN** và **SVTR** (CTC-based), và **TrOCR** (Transformer/Attention-based).
+
+---
+
+## Dữ liệu
+
+Nguồn dữ liệu: **[Manga109-s](http://www.manga109.org/en/)** — tập con công khai của Manga109, gồm ảnh trang manga kèm annotation XML.
+
+Quy trình xử lý sinh ra **hai bộ dữ liệu song song**, mỗi bộ **60,000 mẫu** (48k train / 6k val / 6k test):
+
+| Bộ dữ liệu | Mô tả | Dùng cho |
+|---|---|---|
+| `bubble_dataset` | Ảnh crop nguyên gốc từ bong bóng thoại, giữ nguyên bố cục dọc/ngang | TrOCR |
+| `line_dataset` | Ảnh đã chuyển đổi thành **dòng ngang duy nhất** (bubble → line) | CRNN, SVTR |
+
+Bước chuyển đổi **bubble → line** xử lý cả hai nhánh:
+- **Ảnh dọc**: tách cột chữ, lọc furigana (< 70% chiều rộng cột lớn nhất), sắp xếp từ phải sang trái, xoay 90°, ghép ngang.
+- **Ảnh ngang**: tách dòng chữ, lọc furigana (< 70% chiều cao dòng lớn nhất), ghép ngang.
+
+Script xây dựng dataset: [`notebooks/final_data.ipynb`](notebooks/final_data.ipynb)
+
+---
+
+## Phương pháp
+
+### CRNN — Convolutional Recurrent Neural Network
+
+Biến thể sử dụng backbone **MobileNetV3-Small** (~2M tham số), warm-start từ pretrained tiếng Trung (`ch_ppocr_mobile_v2.0_rec_train`):
+
+- **Backbone**: MobileNetV3-Small, scale = 0.5, input 3×32×320
+- **Neck**: BiLSTM hai chiều, hidden size = 48
+- **Head**: CTCHead ánh xạ ra từ điển tiếng Nhật **2,832 ký tự** (thay từ điển tiếng Trung 6,625 ký tự)
+- **Độ dài chuỗi tối đa**: 80 ký tự
+
+### SVTR — Single Visual model for Scene Text Recognition
+
+Biến thể **SVTR-Tiny** (~6M tham số), warm-start từ pretrained tiếng Trung (`rec_svtr_tiny_none_ctc_ch_train`):
+
+- **Backbone**: SVTRNet, 3 stage, embedding [64, 128, 256], 12 Mixing Block (6 Local + 6 Global)
+- **Neck**: reshape đơn thuần (không RNN), input 3×32×320
+- **Head**: CTCHead ánh xạ ra từ điển tiếng Nhật **2,832 ký tự**
+
+### TrOCR — Transformer-based OCR
+
+Kiến trúc Encoder-Decoder thuần Transformer, không có CNN hay RNN:
+
+- **Encoder**: ViT từ `microsoft/trocr-base-printed` (frozen phần lớn)
+- **Decoder**: `cl-tohoku/bert-base-japanese-char-v2` — Japanese BERT với từ vựng 6,144 ký tự
+- **LoRA**: fine-tune ~30M / 220M tham số (chỉ Cross-Attention + low-rank adapters), giảm 86% tham số cần cập nhật
+- Huấn luyện 2 stage: Stage 1 (15 epoch) + Stage 2 (10 epoch)
+
+---
+
+## Huấn luyện
+
+### CRNN & SVTR — RunPod (RTX 3090)
+
+Cả hai mô hình PaddleOCR được huấn luyện trên nền tảng **[RunPod](https://www.runpod.io/)** với cấu hình:
+
+- **GPU**: NVIDIA RTX 3090 · 24GB VRAM
+- **CPU**: 32 vCPU · 125GB RAM
+- **Framework**: PaddlePaddle GPU 3.0.0 (CUDA 12.6) + PaddleOCR
+- **Workspace**: `/workspace`
+
+| Siêu tham số | CRNN | SVTR |
+|---|---|---|
+| Loss | CTCLoss | CTCLoss |
+| Optimizer | Adam + L2 (1e-5) | Adam + L2 (1e-5) |
+| Learning rate | Cosine decay, max 1.5×10⁻³, warmup 8 ep | Cosine decay, max 8×10⁻⁴, warmup 3 ep |
+| Batch size | 512 / GPU | 256 / GPU |
+| Epochs | 100 (early stopping, patience 24×eval_step) | 100 (early stopping, patience 16×eval_step) |
+
+Notebook huấn luyện:
+- CRNN: [`notebooks/final_train_crnn.ipynb`](notebooks/final_train_crnn.ipynb)
+- SVTR: [`notebooks/final_train_svtr.ipynb`](notebooks/final_train_svtr.ipynb)
+
+### TrOCR — Kaggle (H100)
+
+TrOCR được fine-tune trên **[Kaggle](https://www.kaggle.com/)** tận dụng GPU miễn phí với tối ưu cho H100:
+
+- **Framework**: PyTorch + HuggingFace Transformers + PEFT (LoRA)
+- **Optimizer**: AdamW (`adamw_torch_fused`), weight_decay = 0.01
+- **Learning rate**: Cosine decay, max 10⁻⁴, warmup_ratio = 0.15
+- **Effective batch size**: 48 (batch 12 × gradient accumulation 4)
+- **TF32 + bf16** được bật để tận dụng kiến trúc H100
+
+Notebook huấn luyện: [`notebooks/trocr-rec.ipynb`](notebooks/trocr-rec.ipynb)
+
+---
+
+## Kết quả
+
+Đánh giá trên tập **test 6,000 mẫu** với ba độ đo: Exact Match Accuracy, CER (Character Error Rate), NED (Normalized Edit Distance).
+
+| Mô hình | Accuracy (%) ↑ | CER (%) ↓ | NED (%) ↓ |
+|:---:|:---:|:---:|:---:|
+| CRNN | 41.83 | 33.17 | 26.14 |
+| SVTR | 45.81 | 31.16 | 22.66 |
+| **TrOCR** | **55.38** | **12.70** | **12.22** |
+
+**TrOCR** vượt trội rõ rệt: CER chỉ bằng ~1/3 so với CRNN/SVTR, nhờ tận dụng pretrained backbone (ViT encoder + Japanese BERT decoder) và khả năng đọc không gian 2D qua Cross-Attention mà không bị ràng buộc bởi hướng quét cố định.
+
+---
+
+## Ứng dụng Demo
+
+Demo được xây dựng theo kiến trúc **client-server**:
+
+```
+┌─────────────────────┐         Gradio Public URL          ┌──────────────────────┐
+│   React Frontend    │ ◄──────────────────────────────────►│   Kaggle GPU Backend │
+│   (Docker + Nginx)  │         @gradio/client              │   (demo-cs231.ipynb) │
+│   localhost:8080    │                                     │  SVTR / CRNN / TrOCR │
+└─────────────────────┘                                     └──────────────────────┘
 ```
 
-## 2. Cài đặt môi trường
+### Frontend
 
-Khuyến nghị dùng env conda riêng:
+- **Stack**: React + TypeScript + Vite + TailwindCSS
+- **UI**: Lucide React, Framer Motion
+- Đóng gói bằng **Docker + Nginx**
 
-- `pp_ocr_jap_infer`
+### Backend
 
-Nếu chưa có env, chạy:
+- Notebook Python chạy trên Kaggle GPU, khởi tạo **Gradio server** với `share=True` tạo endpoint công khai
+- Xử lý toàn bộ pipeline: Text Detection (DBNet++) → Snippet Isolation → Text Recognition
 
-```powershell
-conda create -y -n pp_ocr_jap_infer python=3.10
-conda run -n pp_ocr_jap_infer python -m pip install --upgrade pip
-conda run -n pp_ocr_jap_infer python -m pip install paddlepaddle
-conda run -n pp_ocr_jap_infer python -m pip install -r requirements.txt -r PaddleOCR\requirements.txt
-```
+### Hai chế độ vận hành (Pipeline Mode)
 
-## 3. Chuẩn bị model artifacts
+| Chế độ | Đầu vào | Mô tả |
+|---|---|---|
+| **Recognition Only** | Ảnh đã cắt sẵn (snippet) | Chỉ nhận dạng văn bản, so sánh trực tiếp CRNN / SVTR / TrOCR trên cùng ảnh |
+| **Full Pipeline** | Trang manga nguyên gốc (JPG/PNG) | Detection → cắt snippet → nhận dạng, sát với điều kiện thực tế |
 
-Mỗi model cần:
+### Triển khai nhanh
 
-- `inference/inference.json`
-- `inference/inference.pdiparams`
-- `inference/inference.yml`
-- `dict_japanese.txt`
-
-Đặt đúng vị trí:
-
-- CRNN: `models/crnn_mobile_line/`
-- SVTR: `models/svtr_tiny_line/`
-
-## 4. Chuẩn bị input
-
-Bỏ ảnh bubble đã crop vào:
-
-- `input/bubble/`
-
-Đuôi ảnh hỗ trợ:
-
-- `.png`, `.jpg`, `.jpeg`, `.bmp`, `.webp`, `.gif`, `.tif`, `.tiff`
-
-## 5. Chạy inference
-
-### Windows
-
-CRNN:
-
-```powershell
-.\controls\run_infer.ps1 -Model crnn
-```
-
-SVTR:
-
-```powershell
-.\controls\run_infer.ps1 -Model svtr
-```
-
-Bật GPU:
-
-```powershell
-.\controls\run_infer.ps1 -Model svtr -UseGpu
-```
-
-Chỉ định config thủ công:
-
-```powershell
-.\controls\run_infer.ps1 -Config configs/infer.svtr.yaml
-```
-
-### Linux / bash
+**Bước 1** — Chạy backend trên Kaggle:
 
 ```bash
-MODEL=crnn ./controls/run_infer.sh
-MODEL=svtr ./controls/run_infer.sh
+# Mở Demo/demo-cs231.ipynb trên Kaggle, chạy toàn bộ cell
+# Cell cuối in ra:
+# Running on public URL: https://xxxxxxxxxxxxxxxx.gradio.live
 ```
 
-Override config:
+**Bước 2** — Build và chạy frontend bằng Docker:
 
 ```bash
-CONFIG=configs/infer.svtr.yaml ./controls/run_infer.sh
+cd Demo
+docker build --build-arg VITE_GRADIO_URL="https://xxxxxxxxxxxxxxxx.gradio.live" -t manga-ocr-frontend .
+docker run -d -p 8080:80 manga-ocr-frontend
+# Truy cập: http://localhost:8080
 ```
 
-## 6. Output mỗi lần chạy
+> Chi tiết đầy đủ xem tại [`Demo/README.md`](Demo/README.md).
 
-Mỗi lần chạy tạo 1 folder timestamp trong `output/`, ví dụ:
+---
 
-- `output/20260425_025701/`
+## Cấu trúc Repository
 
-Bên trong có:
+```
+CS231/
+├── notebooks/
+│   ├── final_data.ipynb           # Xây dựng bubble_dataset và line_dataset từ Manga109-s
+│   ├── final_train_crnn.ipynb     # Huấn luyện CRNN trên RunPod (PaddleOCR)
+│   ├── final_train_svtr.ipynb     # Huấn luyện SVTR trên RunPod (PaddleOCR)
+│   ├── trocr-rec.ipynb            # Fine-tune TrOCR trên Kaggle (PyTorch + LoRA)
+│   └── final_eda_line_dataset.ipynb  # EDA bộ dữ liệu line
+│
+├── Demo/
+│   ├── demo-cs231.ipynb           # Backend Gradio chạy trên Kaggle GPU
+│   ├── src/App.tsx                # Giao diện React chính
+│   ├── Dockerfile                 # Production build (Nginx)
+│   ├── Dockerfile.dev             # Development build
+│   └── README.md                  # Hướng dẫn triển khai Demo
+│
+├── app/
+│   ├── infer.py                   # Entry point inference pipeline
+│   ├── preprocess.py              # Tiền xử lý ảnh (bubble → line)
+│   ├── paddle_rec.py              # Nhận dạng với CRNN/SVTR (PaddleOCR)
+│   ├── postprocess.py             # Hậu xử lý kết quả
+│   └── utils.py                   # Tiện ích chung
+│
+├── models/
+│   ├── crnn_mobile_line/          # Artifact CRNN (weights + inference model)
+│   ├── svtr_tiny_line/            # Artifact SVTR-Tiny (weights + inference model)
+│   └── trocr/                     # Link tải TrOCR checkpoint
+│
+├── configs/
+│   ├── infer.crnn.yaml            # Config inference CRNN
+│   ├── infer.svtr.yaml            # Config inference SVTR
+│   └── infer.default.yaml         # Config mặc định
+│
+├── controls/
+│   ├── run_infer.sh               # Script chạy inference (Linux/macOS)
+│   └── run_infer.ps1              # Script chạy inference (Windows PowerShell)
+│
+├── input/bubble/                  # Ảnh test mẫu
+├── archives/                      # Notebook thực nghiệm, log, output mẫu
+├── docs/                          # Tài liệu bổ sung
+├── CS231.pdf                      # Báo cáo đề tài
+└── requirements.txt               # Python dependencies
+```
 
-- `line_tmp/`: ảnh line trung gian
-- `failed/`: ảnh preprocess lỗi (nếu có)
-- `pred_raw.txt`: log raw từ PaddleOCR
-- `pred_results.txt`: file kết quả raw nếu `--save_res_path` được hỗ trợ
-- `predictions.json`: kết quả đã parse/normalize
-- `manifest.json`: metadata run
+---
 
-## 7. Thông tin timing
+## Tài liệu tham khảo chính
 
-Trong `manifest.json`:
-
-- `preprocess_elapsed_sec`: thời gian preprocess bubble -> line
-- `inference_elapsed_sec`: thời gian inference recognition
-- `elapsed_sec`: tổng thời gian pipeline
-
-## 8. Config theo model
-
-`configs/infer.crnn.yaml`:
-
-- `paddleocr.rec_algorithm: CRNN`
-- `paths.model_dir: models/crnn_mobile_line/inference`
-
-`configs/infer.svtr.yaml`:
-
-- `paddleocr.rec_algorithm: SVTR`
-- `paths.model_dir: models/svtr_tiny_line/inference`
-
-Lưu ý:
-
-- Cả 2 model đang dùng `rec_image_shape: "3,32,320"`
-- Trên CPU, config hiện để `enable_mkldnn: false` để ổn định hơn
-
-## 9. Troubleshooting
-
-Không thấy ảnh đầu vào:
-
-- Lỗi: `No supported images found in input directory`
-- Kiểm tra `input/bubble/`
-
-Không tìm thấy PaddleOCR script:
-
-- Kiểm tra `PaddleOCR/tools/infer/predict_rec.py`
-- Hoặc truyền `-PaddleOCRDir` trong script PowerShell
-
-Model chạy xong nhưng không có prediction:
-
-- Mở `pred_raw.txt` để xem traceback
-- Kiểm tra `rec_algorithm` có khớp model (`CRNN` hay `SVTR`)
-
-Không có `pred_results.txt`:
-
-- Một số bản `predict_rec.py` không hỗ trợ `--save_res_path`
-- Pipeline sẽ fallback parse từ `pred_raw.txt`
-
+- **CRNN**: Shi et al., *An End-to-End Trainable Neural Network for Image-based Sequence Recognition*, 2015
+- **SVTR**: Du et al., *SVTR: Scene Text Recognition with a Single Visual Model*, IJCAI 2022
+- **TrOCR**: Li et al., *TrOCR: Transformer-based Optical Character Recognition with Pre-trained Models*, 2022
+- **LoRA**: Hu et al., *LoRA: Low-Rank Adaptation of Large Language Models*, ICLR 2022
+- **Manga109-s**: [manga109.org](http://www.manga109.org/en/)
+- **Japanese BERT**: `cl-tohoku/bert-base-japanese-char-v2`, Tohoku NLP Group
