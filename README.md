@@ -1,4 +1,4 @@
-# Nhận Diện Chữ Tiếng Nhật trong Truyện Tranh Manga
+# Nhận Diện Chữ Cái Tiếng Nhật trong Truyện Tranh Manga
 
 > **CS231.Q23 — Nhập Môn Thị Giác Máy Tính**  
 > Trường Đại học Công Nghệ Thông Tin, ĐHQG TP.HCM  
@@ -8,11 +8,13 @@
 
 ## Thành viên nhóm
 
-| STT | Họ và tên | MSSV | Mức độ hoàn thành |
-|:---:|---|:---:|:---:|
-| 1 | Nguyễn Anh Quân | 23521259 | 100% |
-| 2 | Lê Đăng Khoa | 23520740 | 100% |
-| 3 | Nguyễn Minh Đức | 23520312 | 100% |
+
+| STT | Họ và tên       | MSSV     | Mức độ hoàn thành |
+| --- | --------------- | -------- | ----------------- |
+| 1   | Nguyễn Anh Quân | 23521259 | 100%              |
+| 2   | Lê Đăng Khoa    | 23520740 | 100%              |
+| 3   | Nguyễn Minh Đức | 23520312 | 100%              |
+
 
 ---
 
@@ -35,16 +37,19 @@ Nguồn dữ liệu: **[Manga109-s](http://www.manga109.org/en/)** — tập con
 
 Quy trình xử lý sinh ra **hai bộ dữ liệu song song**, mỗi bộ **60,000 mẫu** (48k train / 6k val / 6k test):
 
-| Bộ dữ liệu | Mô tả | Dùng cho |
-|---|---|---|
-| `bubble_dataset` | Ảnh crop nguyên gốc từ bong bóng thoại, giữ nguyên bố cục dọc/ngang | TrOCR |
-| `line_dataset` | Ảnh đã chuyển đổi thành **dòng ngang duy nhất** (bubble → line) | CRNN, SVTR |
+
+| Bộ dữ liệu       | Mô tả                                                               | Dùng cho   |
+| ---------------- | ------------------------------------------------------------------- | ---------- |
+| `bubble_dataset` | Ảnh crop nguyên gốc từ bong bóng thoại, giữ nguyên bố cục dọc/ngang | TrOCR      |
+| `line_dataset`   | Ảnh đã chuyển đổi thành **dòng ngang duy nhất** (bubble → line)     | CRNN, SVTR |
+
 
 Bước chuyển đổi **bubble → line** xử lý cả hai nhánh:
+
 - **Ảnh dọc**: tách cột chữ, lọc furigana (< 70% chiều rộng cột lớn nhất), sắp xếp từ phải sang trái, xoay 90°, ghép ngang.
 - **Ảnh ngang**: tách dòng chữ, lọc furigana (< 70% chiều cao dòng lớn nhất), ghép ngang.
 
-Script xây dựng dataset: [`notebooks/final_data.ipynb`](notebooks/final_data.ipynb)
+Script xây dựng dataset: `[notebooks/final_data.ipynb](notebooks/final_data.ipynb)`
 
 ---
 
@@ -89,17 +94,20 @@ Cả hai mô hình PaddleOCR được huấn luyện trên nền tảng **[RunPo
 - **Framework**: PaddlePaddle GPU 3.0.0 (CUDA 12.6) + PaddleOCR
 - **Workspace**: `/workspace`
 
-| Siêu tham số | CRNN | SVTR |
-|---|---|---|
-| Loss | CTCLoss | CTCLoss |
-| Optimizer | Adam + L2 (1e-5) | Adam + L2 (1e-5) |
-| Learning rate | Cosine decay, max 1.5×10⁻³, warmup 8 ep | Cosine decay, max 8×10⁻⁴, warmup 3 ep |
-| Batch size | 512 / GPU | 256 / GPU |
-| Epochs | 100 (early stopping, patience 24×eval_step) | 100 (early stopping, patience 16×eval_step) |
+
+| Siêu tham số  | CRNN                                        | SVTR                                        |
+| ------------- | ------------------------------------------- | ------------------------------------------- |
+| Loss          | CTCLoss                                     | CTCLoss                                     |
+| Optimizer     | Adam + L2 (1e-5)                            | Adam + L2 (1e-5)                            |
+| Learning rate | Cosine decay, max 1.5×10⁻³, warmup 8 ep     | Cosine decay, max 8×10⁻⁴, warmup 3 ep       |
+| Batch size    | 512 / GPU                                   | 256 / GPU                                   |
+| Epochs        | 100 (early stopping, patience 24×eval_step) | 100 (early stopping, patience 16×eval_step) |
+
 
 Notebook huấn luyện:
-- CRNN: [`notebooks/final_train_crnn.ipynb`](notebooks/final_train_crnn.ipynb)
-- SVTR: [`notebooks/final_train_svtr.ipynb`](notebooks/final_train_svtr.ipynb)
+
+- CRNN: `[notebooks/final_train_crnn.ipynb](notebooks/final_train_crnn.ipynb)`
+- SVTR: `[notebooks/final_train_svtr.ipynb](notebooks/final_train_svtr.ipynb)`
 
 ### TrOCR — Kaggle (H100)
 
@@ -111,7 +119,7 @@ TrOCR được fine-tune trên **[Kaggle](https://www.kaggle.com/)** tận dụn
 - **Effective batch size**: 48 (batch 12 × gradient accumulation 4)
 - **TF32 + bf16** được bật để tận dụng kiến trúc H100
 
-Notebook huấn luyện: [`notebooks/trocr-rec.ipynb`](notebooks/trocr-rec.ipynb)
+Notebook huấn luyện: `[notebooks/trocr-rec.ipynb](notebooks/trocr-rec.ipynb)`
 
 ---
 
@@ -119,11 +127,13 @@ Notebook huấn luyện: [`notebooks/trocr-rec.ipynb`](notebooks/trocr-rec.ipynb
 
 Đánh giá trên tập **test 6,000 mẫu** với ba độ đo: Exact Match Accuracy, CER (Character Error Rate), NED (Normalized Edit Distance).
 
-| Mô hình | Accuracy (%) ↑ | CER (%) ↓ | NED (%) ↓ |
-|:---:|:---:|:---:|:---:|
-| CRNN | 41.83 | 33.17 | 26.14 |
-| SVTR | 45.81 | 31.16 | 22.66 |
-| **TrOCR** | **55.38** | **12.70** | **12.22** |
+
+| Mô hình   | Accuracy (%) ↑ | CER (%) ↓ | NED (%) ↓ |
+| --------- | -------------- | --------- | --------- |
+| CRNN      | 41.83          | 33.17     | 26.14     |
+| SVTR      | 45.81          | 31.16     | 22.66     |
+| **TrOCR** | **55.38**      | **12.70** | **12.22** |
+
 
 **TrOCR** vượt trội rõ rệt: CER chỉ bằng ~1/3 so với CRNN/SVTR, nhờ tận dụng pretrained backbone (ViT encoder + Japanese BERT decoder) và khả năng đọc không gian 2D qua Cross-Attention mà không bị ràng buộc bởi hướng quét cố định.
 
@@ -154,10 +164,12 @@ Demo được xây dựng theo kiến trúc **client-server**:
 
 ### Hai chế độ vận hành (Pipeline Mode)
 
-| Chế độ | Đầu vào | Mô tả |
-|---|---|---|
-| **Recognition Only** | Ảnh đã cắt sẵn (snippet) | Chỉ nhận dạng văn bản, so sánh trực tiếp CRNN / SVTR / TrOCR trên cùng ảnh |
-| **Full Pipeline** | Trang manga nguyên gốc (JPG/PNG) | Detection → cắt snippet → nhận dạng, sát với điều kiện thực tế |
+
+| Chế độ               | Đầu vào                          | Mô tả                                                                      |
+| -------------------- | -------------------------------- | -------------------------------------------------------------------------- |
+| **Recognition Only** | Ảnh đã cắt sẵn (snippet)         | Chỉ nhận dạng văn bản, so sánh trực tiếp CRNN / SVTR / TrOCR trên cùng ảnh |
+| **Full Pipeline**    | Trang manga nguyên gốc (JPG/PNG) | Detection → cắt snippet → nhận dạng, sát với điều kiện thực tế             |
+
 
 ### Triển khai nhanh
 
@@ -178,7 +190,7 @@ docker run -d -p 8080:80 manga-ocr-frontend
 # Truy cập: http://localhost:8080
 ```
 
-> Chi tiết đầy đủ xem tại [`Demo/README.md`](Demo/README.md).
+> Chi tiết đầy đủ xem tại `[Demo/README.md](Demo/README.md)`.
 
 ---
 
@@ -238,3 +250,4 @@ CS231/
 - **LoRA**: Hu et al., *LoRA: Low-Rank Adaptation of Large Language Models*, ICLR 2022
 - **Manga109-s**: [manga109.org](http://www.manga109.org/en/)
 - **Japanese BERT**: `cl-tohoku/bert-base-japanese-char-v2`, Tohoku NLP Group
+
