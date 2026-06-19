@@ -61,7 +61,7 @@ Biến thể sử dụng backbone **MobileNetV3-Small** (~2M tham số), warm-st
 
 - **Backbone**: MobileNetV3-Small, scale = 0.5, input 3×32×320
 - **Neck**: BiLSTM hai chiều, hidden size = 48
-- **Head**: CTCHead ánh xạ ra từ điển tiếng Nhật **2,832 ký tự** (thay từ điển tiếng Trung 6,625 ký tự)
+- **Head**: CTCHead ánh xạ ra từ điển tiếng Nhật **2,832 ký tự** 
 - **Độ dài chuỗi tối đa**: 80 ký tự
 
 ### SVTR — Single Visual model for Scene Text Recognition
